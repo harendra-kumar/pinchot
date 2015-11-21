@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Pinchot where
 
 import Pinchot.Intervals
@@ -7,8 +8,10 @@ import Control.Monad.Fix
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State
+import Data.Foldable (toList)
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Monoid ((<>))
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Char (isUpper)
@@ -70,6 +73,28 @@ nonTerminal :: Text -> Seq (Text, Seq Rule) -> Pinchot Rule
 nonTerminal name sq = do
   mapM (uncurry newBranch) sq
   return $ Rule name (Right (fmap (uncurry Branch) sq))
+
+printTerminal
+  :: Text
+  -> Intervals Char
+  -> Text
+printTerminal name ivls = X.unlines [ openCom, com, closeCom, nt, derive ]
+  where
+    openCom = "{- Terminal from"
+    com = "    " <> X.pack (show ivls)
+    closeCom = "-}"
+    nt = "newtype " <> name <> " = " <> name <> " Char"
+    derive = "  deriving (Eq, Ord, Show)"
+
+printBranch
+  :: Bool
+  -- ^ True if this is the first branch
+  -> Branch
+  -> Text
+printBranch first (Branch name rules) = X.unwords (leader : name : rest)
+  where
+    leader = "  " <> if first then "=" else "|"
+    rest = toList . fmap (\(Rule x _) -> x) $ rules
 
 printAst :: Pinchot a -> Text
 printAst = undefined
