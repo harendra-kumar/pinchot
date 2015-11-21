@@ -70,5 +70,11 @@ main = defaultMain $ do
       : buildDepends libraryDepends
       : commonOptions
     , [ githubHead "massysett" "penny"
+      , executable "grower" ( mainIs "grower.hs"
+                              : buildDepends libraryDepends
+                              : otherModules libMods
+                              : hsSourceDirs ["grower"]
+                              : commonOptions
+                            )
       ]
     )

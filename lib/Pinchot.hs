@@ -1,6 +1,15 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Pinchot where
+module Pinchot
+  ( Intervals(..)
+  , alone
+  , Rule
+  , Pinchot
+  , terminal
+  , nonTerminal
+  , pinchotToAst
+  , astToStdout
+  ) where
 
 import Pinchot.Intervals
 
@@ -9,22 +18,27 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.State
 import Data.Foldable (toList)
+import Data.List (intersperse)
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Maybe (mapMaybe)
 import Data.Monoid ((<>))
 import Data.Sequence (Seq)
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 import Data.Char (isUpper)
 import qualified Data.Text as X
+import qualified Data.Text.IO as XIO
+import System.Exit (exitFailure)
+import qualified System.IO as IO
 
-data Rule = Rule Text (Either (Intervals Char) (Seq Branch))
+data Rule = Rule Text (Either (Intervals Char) (Branch, Seq Branch))
   deriving (Eq, Ord, Show)
 
 data Branch = Branch Text (Seq Rule)
   deriving (Eq, Ord, Show)
 
 data Names = Names
-  { rules :: Map Text (Either (Intervals Char) (Seq Branch))
+  { rules :: Map Text (Either (Intervals Char) (Branch, Seq Branch))
   , branches :: Map Text (Seq Rule)
   } deriving (Eq, Ord, Show)
 
@@ -35,7 +49,7 @@ newtype Pinchot a = Pinchot (ExceptT Error (State Names) a)
 
 newRule
   :: Text
-  -> Either (Intervals Char) (Seq Branch)
+  -> Either (Intervals Char) (Branch, Seq Branch)
   -> Pinchot ()
 newRule name ei = Pinchot $ do
   st <- lift get
@@ -69,10 +83,13 @@ terminal name ivls = do
   newRule name (Left ivls)
   return $ Rule name (Left ivls)
 
-nonTerminal :: Text -> Seq (Text, Seq Rule) -> Pinchot Rule
-nonTerminal name sq = do
+nonTerminal :: Text -> (Text, Seq Rule) -> Seq (Text, Seq Rule) -> Pinchot Rule
+nonTerminal name b1 sq = do
+  uncurry newBranch b1
   mapM (uncurry newBranch) sq
-  return $ Rule name (Right (fmap (uncurry Branch) sq))
+  let branches = Right (uncurry Branch b1, fmap (uncurry Branch) sq)
+  newRule name branches
+  return $ Rule name branches
 
 printTerminal
   :: Text
@@ -91,10 +108,45 @@ printBranch
   -- ^ True if this is the first branch
   -> Branch
   -> Text
-printBranch first (Branch name rules) = X.unwords (leader : name : rest)
+printBranch first (Branch name rules) = X.unwords (leader : name : rest) <> "\n"
   where
     leader = "  " <> if first then "=" else "|"
     rest = toList . fmap (\(Rule x _) -> x) $ rules
 
-printAst :: Pinchot a -> Text
-printAst = undefined
+printNonTerminal
+  :: Text
+  -> (Branch, Seq Branch)
+  -> Text
+printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
+  where
+    line1 = "data " <> name <> "\n"
+    linesRest = printBranch True b1 : toList (fmap (printBranch False) bs)
+
+printAst :: Map Text (Either (Intervals Char) (Branch, Seq Branch)) -> Text
+printAst mp = terminals <> nonTerminals
+  where
+    label lbl = X.unlines ["--", "-- " <> lbl, "--", ""]
+    terminals = label "Terminals"
+      <> X.concat (intersperse "\n" (fmap (uncurry printTerminal) terms))
+    nonTerminals = label "Non terminals"
+      <> X.concat (intersperse "\n" (fmap (uncurry printNonTerminal) nonTerms))
+    terms = mapMaybe f . M.toList $ mp
+      where
+        f (x, ei) = either (\i -> Just (x, i)) (const Nothing) ei
+    nonTerms = mapMaybe f . M.toList $ mp
+      where
+        f (x, ei) = either (const Nothing) (\p -> Just (x, p)) ei
+
+pinchotToAst :: Pinchot a -> Either Text Text
+pinchotToAst (Pinchot exc) = case eiErr of
+  Left err -> Left err
+  Right _ -> Right $ printAst (rules st')
+  where
+    (eiErr, st') = flip runState (Names M.empty M.empty) . runExceptT $ exc
+
+astToStdout :: Pinchot a -> IO ()
+astToStdout p = case pinchotToAst p of
+  Left e -> do
+    IO.hPutStrLn IO.stderr ("error: bad or duplicate name: " <> unpack e)
+    exitFailure
+  Right g -> XIO.putStr g
