@@ -31,28 +31,28 @@ import qualified Data.Text.IO as XIO
 import System.Exit (exitFailure)
 import qualified System.IO as IO
 
-data Rule = Rule Text (Either (Intervals Char) (Branch, Seq Branch))
+data Rule t = Rule Text (Either (Intervals t) (Branch t, Seq (Branch t)))
   deriving (Eq, Ord, Show)
 
-data Branch = Branch Text (Seq Rule)
+data Branch t = Branch Text (Seq (Rule t))
   deriving (Eq, Ord, Show)
 
-data Names = Names
-  { rules :: Map Text (Either (Intervals Char) (Branch, Seq Branch))
-  , branches :: Map Text (Seq Rule)
+data Names t = Names
+  { rules :: Map Text (Either (Intervals t) (Branch t, Seq (Branch t)))
+  , branches :: Map Text (Seq (Rule t))
   , nextIndex :: Int
-  , allRules :: Map Int Rule
+  , allRules :: Map Int (Rule t)
   } deriving (Eq, Ord, Show)
 
 type Error = Text
 
-newtype Pinchot a = Pinchot (ExceptT Error (State Names) a)
+newtype Pinchot t a = Pinchot (ExceptT Error (State (Names t)) a)
   deriving (Functor, Applicative, Monad, MonadFix)
 
 newRule
   :: Text
-  -> Either (Intervals Char) (Branch, Seq Branch)
-  -> Pinchot ()
+  -> Either (Intervals t) (Branch t, Seq (Branch t))
+  -> Pinchot t ()
 newRule name ei = Pinchot $ do
   st <- lift get
   if validName name st
@@ -66,7 +66,7 @@ newRule name ei = Pinchot $ do
 
 validName
   :: Text
-  -> Names
+  -> Names t
   -> Bool
 validName name (Names rls bchs _ _) = case X.uncons name of
   Nothing -> False
@@ -75,8 +75,8 @@ validName name (Names rls bchs _ _) = case X.uncons name of
 
 newBranch
   :: Text
-  -> Seq Rule
-  -> Pinchot ()
+  -> Seq (Rule t)
+  -> Pinchot t ()
 newBranch name rs = Pinchot $ do
   st <- lift get
   if validName name st
@@ -84,12 +84,16 @@ newBranch name rs = Pinchot $ do
          in lift (put newSt)
     else throwE name
 
-terminal :: Text -> Intervals Char -> Pinchot Rule
+terminal :: Text -> Intervals t -> Pinchot t (Rule t)
 terminal name ivls = do
   newRule name (Left ivls)
   return $ Rule name (Left ivls)
 
-nonTerminal :: Text -> (Text, Seq Rule) -> Seq (Text, Seq Rule) -> Pinchot Rule
+nonTerminal
+  :: Text
+  -> (Text, Seq (Rule t))
+  -> Seq (Text, Seq (Rule t))
+  -> Pinchot t (Rule t)
 nonTerminal name b1 sq = do
   uncurry newBranch b1
   mapM (uncurry newBranch) sq
@@ -98,8 +102,9 @@ nonTerminal name b1 sq = do
   return $ Rule name branches
 
 printTerminal
-  :: Text
-  -> Intervals Char
+  :: Show t
+  => Text
+  -> Intervals t
   -> Text
 printTerminal name ivls = X.unlines [ openCom, com, closeCom, nt, derive ]
   where
@@ -112,7 +117,7 @@ printTerminal name ivls = X.unlines [ openCom, com, closeCom, nt, derive ]
 printBranch
   :: Bool
   -- ^ True if this is the first branch
-  -> Branch
+  -> Branch t
   -> Text
 printBranch first (Branch name rules) = X.unwords (leader : name : rest) <> "\n"
   where
@@ -121,7 +126,7 @@ printBranch first (Branch name rules) = X.unwords (leader : name : rest) <> "\n"
 
 printNonTerminal
   :: Text
-  -> (Branch, Seq Branch)
+  -> (Branch t, Seq (Branch t))
   -> Text
 printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
   where
@@ -130,19 +135,23 @@ printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
       <> ["  deriving (Eq, Ord, Show)"]
 
 printRule
-  :: Rule
+  :: Show t
+  => Rule t
   -> Text
 printRule (Rule name ei) = case ei of
   Left term -> printTerminal name term
   Right nonTerm -> printNonTerminal name nonTerm
 
-printAllRules :: Map Int Rule -> Text
+printAllRules :: Show t => Map Int (Rule t) -> Text
 printAllRules = X.concat . intersperse "\n\n"
   . fmap printRule
   . fmap snd
   . M.toAscList
 
-printAst :: Map Text (Either (Intervals Char) (Branch, Seq Branch)) -> Text
+printAst
+  :: Show t
+  => Map Text (Either (Intervals t) (Branch t, Seq (Branch t)))
+  -> Text
 printAst mp = terminals <> nonTerminals
   where
     label lbl = X.unlines ["--", "-- " <> lbl, "--", ""]
@@ -157,7 +166,7 @@ printAst mp = terminals <> nonTerminals
       where
         f (x, ei) = either (const Nothing) (\p -> Just (x, p)) ei
 
-allPinchotRules :: Pinchot a -> Either Text Text
+allPinchotRules :: Show t => Pinchot t a -> Either Text Text
 allPinchotRules (Pinchot exc) = case eiErr of
   Left err -> Left err
   Right _ -> Right $ printAllRules (allRules st')
@@ -165,7 +174,7 @@ allPinchotRules (Pinchot exc) = case eiErr of
     (eiErr, st') = flip runState (Names M.empty M.empty 0 M.empty)
       . runExceptT $ exc
 
-pinchotToAst :: Pinchot a -> Either Text Text
+pinchotToAst :: Show t => Pinchot t a -> Either Text Text
 pinchotToAst (Pinchot exc) = case eiErr of
   Left err -> Left err
   Right _ -> Right $ printAst (rules st')
@@ -173,7 +182,7 @@ pinchotToAst (Pinchot exc) = case eiErr of
     (eiErr, st') = flip runState (Names M.empty M.empty 0 M.empty)
       . runExceptT $ exc
 
-astToStdout :: Pinchot a -> IO ()
+astToStdout :: Show t => Pinchot t a -> IO ()
 astToStdout p = case allPinchotRules p of
   Left e -> do
     IO.hPutStrLn IO.stderr ("error: bad or duplicate name: " <> unpack e)
