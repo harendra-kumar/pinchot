@@ -40,6 +40,8 @@ data Branch = Branch Text (Seq Rule)
 data Names = Names
   { rules :: Map Text (Either (Intervals Char) (Branch, Seq Branch))
   , branches :: Map Text (Seq Rule)
+  , nextIndex :: Int
+  , allRules :: Map Int Rule
   } deriving (Eq, Ord, Show)
 
 type Error = Text
@@ -54,7 +56,11 @@ newRule
 newRule name ei = Pinchot $ do
   st <- lift get
   if validName name st
-    then let newSt = st { rules = M.insert name ei (rules st) }
+    then let newSt = st { rules = M.insert name ei (rules st)
+                        , nextIndex = succ (nextIndex st)
+                        , allRules = M.insert (nextIndex st) (Rule name ei)
+                            (allRules st)
+                        }
          in lift (put newSt)
     else throwE name
 
@@ -62,7 +68,7 @@ validName
   :: Text
   -> Names
   -> Bool
-validName name (Names rls bchs) = case X.uncons name of
+validName name (Names rls bchs _ _) = case X.uncons name of
   Nothing -> False
   Just (x, _) ->
     isUpper x && not (M.member name rls) && not (M.member name bchs)
@@ -121,6 +127,20 @@ printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
   where
     line1 = "data " <> name <> "\n"
     linesRest = printBranch True b1 : toList (fmap (printBranch False) bs)
+      <> ["  deriving (Eq, Ord, Show)"]
+
+printRule
+  :: Rule
+  -> Text
+printRule (Rule name ei) = case ei of
+  Left term -> printTerminal name term
+  Right nonTerm -> printNonTerminal name nonTerm
+
+printAllRules :: Map Int Rule -> Text
+printAllRules = X.concat . intersperse "\n\n"
+  . fmap printRule
+  . fmap snd
+  . M.toAscList
 
 printAst :: Map Text (Either (Intervals Char) (Branch, Seq Branch)) -> Text
 printAst mp = terminals <> nonTerminals
@@ -137,15 +157,24 @@ printAst mp = terminals <> nonTerminals
       where
         f (x, ei) = either (const Nothing) (\p -> Just (x, p)) ei
 
+allPinchotRules :: Pinchot a -> Either Text Text
+allPinchotRules (Pinchot exc) = case eiErr of
+  Left err -> Left err
+  Right _ -> Right $ printAllRules (allRules st')
+  where
+    (eiErr, st') = flip runState (Names M.empty M.empty 0 M.empty)
+      . runExceptT $ exc
+
 pinchotToAst :: Pinchot a -> Either Text Text
 pinchotToAst (Pinchot exc) = case eiErr of
   Left err -> Left err
   Right _ -> Right $ printAst (rules st')
   where
-    (eiErr, st') = flip runState (Names M.empty M.empty) . runExceptT $ exc
+    (eiErr, st') = flip runState (Names M.empty M.empty 0 M.empty)
+      . runExceptT $ exc
 
 astToStdout :: Pinchot a -> IO ()
-astToStdout p = case pinchotToAst p of
+astToStdout p = case allPinchotRules p of
   Left e -> do
     IO.hPutStrLn IO.stderr ("error: bad or duplicate name: " <> unpack e)
     exitFailure
