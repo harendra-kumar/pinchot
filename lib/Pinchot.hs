@@ -2,16 +2,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Pinchot
-  ( Intervals
+  ( -- * Intervals
+    Intervals
   , include
   , exclude
   , solo
   , pariah
-  , Rule
+
+  -- * Simple production rules
   , Pinchot
+  , RuleName
+  , Rule
   , terminal
   , terminalSeq
   , nonTerminal
+
+  -- * Rules that modify other rules
+  , list
+  , list1
+  , option
+
+  -- * Rendering rules to source code text
   , allPinchotRules
   , allPinchotRulesToStdout
   , ancestors
@@ -46,6 +57,9 @@ data RuleType t
   = RTerminal (Intervals t)
   | RBranch (Branch t, Seq (Branch t))
   | RSeqTerm (Seq t)
+  | ROptional (Rule t)
+  | RMany (Rule t)
+  | RMany1 (Rule t)
   deriving (Eq, Ord, Show)
 
 -- | A single production rule.  It may be a terminal or a non-terminal.
@@ -115,12 +129,17 @@ newBranch name rs = Pinchot $ do
          in lift (put newSt)
     else throwE $ InvalidName name
 
+-- | Type synonym for the name of a production rule.  
+-- This will be the name of the type constructor for the corresponding
+-- type in the AST, so this must be a valid Haskell type constructor
+-- name.  The type constructor name must not collide with any other
+-- type constructor name or data contstructor name.
+type RuleName = Text
+
 -- | Creates a terminal production rule.
 terminal
 
-  :: Text
-  -- ^ This is the name of the type constructor.  It will also be used
-  -- for the name of the data constructor (it will be a @newtype@).
+  :: RuleName
 
   -> Intervals t
   -- ^ Valid terminal symbols
@@ -143,10 +162,7 @@ splitNonTerminal n sq = Pinchot $ case viewl sq of
 -- parsing specific words.
 terminalSeq
 
-  :: Text
-  -- ^ This is the name of the type constructor.  It will also be used
-  -- for the name of the data constructor (it will be a @newtype@ that
-  -- wraps a @Seq@ of the terminal type).
+  :: RuleName
 
   -> Seq t
   -- ^ Sequence of terminal symbols to recognize
@@ -160,12 +176,7 @@ terminalSeq name sq = do
 -- | Creates a new non-terminal production rule.
 nonTerminal
 
-  :: Text
-  -- ^ Name of the rule.  This will be the name of the type
-  -- constructor for the corresponding type in the AST, so this must
-  -- be a valid Haskell type constructor name.  The type constructor
-  -- name must not collide with any other type constructor name or
-  -- data contstructor name.
+  :: RuleName
 
   -> Seq (Text, Seq (Rule t))
   -- ^ Alternatives.  There must be at least one alternative;
@@ -183,6 +194,45 @@ nonTerminal name sq = do
   newRule name branches
   return $ Rule name branches
 
+-- | Creates a rule for the production of a sequence of other rules.
+list
+  :: RuleName
+
+  -> Rule t
+  -- ^ The resulting 'Rule' is a sequence of productions of this
+  -- 'Rule'; that is, this 'Rule' may appear zero or more times.
+
+  -> Pinchot t (Rule t)
+list name r = do
+  newRule name (RMany r)
+  return $ Rule name (RMany r)
+
+-- | Creates a rule for a production that appears at least once.
+list1
+  :: RuleName
+  -> Rule t
+  -- ^ The resulting 'Rule' produces this 'Rule' at least once.
+  -> Pinchot t (Rule t)
+list1 name r = do
+  newRule name (RMany1 r)
+  return $ Rule name (RMany1 r)
+
+-- | Creates a rule for a production that optionally produces another
+-- rule.
+option
+  :: RuleName
+  -> Rule t
+  -- ^ The resulting 'Rule' optionally produces this 'Rule'; that is,
+  -- this 'Rule' may appear once or not at all.
+
+  -> Pinchot t (Rule t)
+option name r = do
+  newRule name (ROptional r)
+  return $ Rule name (ROptional r)
+
+derivers :: Text
+derivers = "  deriving (Eq, Ord, Show)"
+
 printTerminal
   :: Show t
   => Text
@@ -192,13 +242,12 @@ printTerminal
   -> Intervals t
   -> Text
 printTerminal tyName name ivls
-  = X.unlines [ openCom, com, closeCom, nt, derive ]
+  = X.unlines [ openCom, com, closeCom, nt, derivers ]
   where
     openCom = "{- Terminal from"
     com = "   " <> X.pack (show ivls)
     closeCom = "-}"
     nt = X.unwords ["newtype", name, "=", name, tyName]
-    derive = "  deriving (Eq, Ord, Show)"
 
 printBranch
   :: Bool
@@ -218,7 +267,7 @@ printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
   where
     line1 = "data " <> name <> "\n"
     linesRest = printBranch True b1 : toList (fmap (printBranch False) bs)
-      <> ["  deriving (Eq, Ord, Show)\n"]
+      <> [derivers <> "\n"]
 
 printSeqTerm
   :: Show t
@@ -235,8 +284,40 @@ printSeqTerm tyName name sq
     closeCom = "-}"
     showSeq = "  " <> X.pack (show sq)
     definition = X.unwords ["newtype", name, "=", name,
-                            "( Seq " <> tyName <> ")" ]
-    derivers = "  deriving (Eq, Ord, Show)"
+                            "(Seq " <> tyName <> ")" ]
+
+printOptional
+  :: Text
+  -- ^ Type constructor name
+  -> Rule t
+  -> Text
+printOptional name (Rule inner _)
+  = X.unlines [definition, derivers]
+  where
+    definition = X.unwords ["newtype", name, "=", name,
+      "(Maybe " <> inner <> ")" ]
+
+printMany
+  :: Text
+  -- ^ Type constructor name
+  -> Rule t
+  -> Text
+printMany name (Rule inner _)
+  = X.unlines [definition, derivers]
+  where
+    definition = X.unwords ["newtype", name, "=", name,
+      "(Seq " <> inner <> ")" ]
+
+printMany1
+  :: Text
+  -- ^ Type constructor name
+  -> Rule t
+  -> Text
+printMany1 name (Rule inner _)
+  = X.unlines [definition, derivers]
+  where
+    definition = X.unwords ["data", name, "=", name,
+      inner, "(Seq " <> inner <> ")" ]
 
 printRule
   :: Show t
@@ -248,6 +329,9 @@ printRule tyName (Rule name ei) = case ei of
   RTerminal term -> printTerminal tyName name term
   RBranch nonTerm -> printNonTerminal name nonTerm
   RSeqTerm sq -> printSeqTerm tyName name sq
+  ROptional r -> printOptional name r
+  RMany r -> printMany name r
+  RMany1 r -> printMany1 name r
 
 printAllRules
   :: Show t
@@ -310,6 +394,15 @@ getAncestors r@(Rule name ei) = do
           ass <- fmap join . mapM branchAncestors $ bs
           return $ r <| as1 <> ass
         RSeqTerm _ -> return (Seq.singleton r)
+        ROptional r -> do
+          cs <- getAncestors r
+          return $ r <| cs
+        RMany r -> do
+          cs <- getAncestors r
+          return $ r <| cs
+        RMany1 r -> do
+          cs <- getAncestors r
+          return $ r <| cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
