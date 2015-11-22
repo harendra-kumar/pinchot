@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedLists #-}
-module Pinchot.Intervals' where
+module Pinchot.Intervals where
 
 import Control.Monad (join)
 import Data.Monoid ((<>))

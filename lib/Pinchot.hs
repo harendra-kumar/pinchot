@@ -1,8 +1,11 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Pinchot
-  ( Intervals(..)
-  , alone
+  ( Intervals
+  , include
+  , exclude
+  , solo
+  , pariah
   , Rule
   , Pinchot
   , terminal
