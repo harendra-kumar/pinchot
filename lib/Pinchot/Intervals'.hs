@@ -49,6 +49,9 @@ members i = Seq.fromList [endLeft i .. endRight i]
 sortIntervalSeq :: Ord a => Seq (a, a) -> Seq (a, a)
 sortIntervalSeq = Seq.sortBy (comparing endLeft <> comparing endRight)
 
+standardizeInterval :: Ord a => (a, a) -> (a, a)
+standardizeInterval (a, b) = (min a b, max a b)
+
 -- | Sorts the intervals using 'sortIntervals' and presents them in a
 -- regular order using 'flatten'.  The function @standardize a@ has
 -- the following properties, where @b@ is the result:
@@ -77,7 +80,7 @@ standardizeIntervalSeq = flattenIntervalSeq . sortIntervalSeq
 -- 'sortIntervals', the same properties for 'standardize' hold for
 -- this function.  Otherwise, its properties are undefined.
 flattenIntervalSeq :: (Ord a, Enum a) => Seq (a, a) -> Seq (a, a)
-flattenIntervalSeq = go Nothing
+flattenIntervalSeq = fmap standardizeInterval . go Nothing
   where
     go mayCurr sq = case (mayCurr, viewl sq) of
       (Nothing, EmptyL) -> []
@@ -142,7 +145,12 @@ remover
   -> Seq (a, a)
   -- ^ From this sequence of intervals
   -> Seq (a, a)
-remover ivl = join . fmap (removeInterval ivl)
+remover ivl = join . fmap squash . fmap (removeInterval ivl)
+  where
+    squash (Nothing, Nothing) = Seq.empty
+    squash (Just x, Nothing) = Seq.singleton x
+    squash (Nothing, Just x) = Seq.singleton x
+    squash (Just x, Just y) = x <| y <| Seq.empty
 
 -- | Removes a single interval from a single other interval.  Returns
 -- a sequence of intervals, which always
@@ -152,16 +160,36 @@ removeInterval
   -- ^ Remove this interval
   -> (a, a)
   -- ^ From this interval
-  -> Seq (a, a)
-removeInterval ivl oldIvl = onLeft <> onRight
+  -> (Maybe (a, a), Maybe (a, a))
+removeInterval ivl oldIvl = (onLeft, onRight)
   where
     onLeft
       | endLeft ivl > endLeft oldIvl =
-          Seq.singleton ( endLeft oldIvl
-            , min (pred (endLeft ivl)) (endRight oldIvl))
-      | otherwise = Seq.empty
+          Just ( endLeft oldIvl
+               , min (pred (endLeft ivl)) (endRight oldIvl))
+      | otherwise = Nothing
     onRight
       | endRight ivl < endRight oldIvl =
-          Seq.singleton ( max (succ (endRight ivl)) (endLeft oldIvl)
-                        , endRight oldIvl)
-      | otherwise = Seq.empty
+          Just ( max (succ (endRight ivl)) (endLeft oldIvl)
+               , endRight oldIvl)
+      | otherwise = Nothing
+
+standardizeIntervals
+  :: (Ord a, Enum a)
+  => Intervals a
+  -> Intervals a
+standardizeIntervals (Intervals i e)
+  = Intervals (standardizeIntervalSeq i) (standardizeIntervalSeq e)
+
+-- | Sorts the intervals using 'standardize', and then removes the
+-- excludes with 'removeExcludes'.
+splitIntervals
+  :: (Ord a, Enum a)
+  => Intervals a
+  -> Seq (a, a)
+splitIntervals (Intervals is es)
+  = removeExcludes (standardizeIntervalSeq is) es
+
+-- | 'True' if the given element is a member of the 'Intervals'.
+inIntervals :: (Enum a, Ord a) => a -> Intervals a -> Bool
+inIntervals a = any (inInterval a) . splitIntervals
