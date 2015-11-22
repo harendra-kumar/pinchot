@@ -6,7 +6,7 @@ import Pinchot
 import Data.Monoid ((<>))
 import Data.Sequence (fromList)
 
--- | A grammar for simple postal addresses.  This example would never
+-- | A grammar for simple U.S. postal addresses.  This example would never
 -- hold up to real-world usage but it gives you a flavor of how
 -- Pinchot works.
 postal :: Pinchot Char (Rule Char)
@@ -30,41 +30,35 @@ postal = mdo
     , ("SBoulevard", [boulevard])]
   space <- terminal "Space" (solo ' ')
   comma <- terminal "Comma" (solo ',')
-  return comma
 
-{-
   word <- list1 "Word" letter
   preSpacedWord <- nonTerminal "PreSpacedWord"
     [("PreSpacedWord", [space, word])]
   preSpacedWords <- list "PreSpacedWords" preSpacedWord
   words <- nonTerminal "Words"
     [("Words", [word, preSpacedWords])]
--}
 
+  number <- wrap "Number" digits
+  streetName <- wrap "StreetName" words
+  city <- wrap "City" words
+  state <- wrap "State" word
+  zipCode <- wrap "ZipCode" digits
+  directionSpace <- nonTerminal "DirectionSpace"
+    [("DirectionSpace", [direction, space])]
+  spaceSuffix <- nonTerminal "SpaceSuffix"
+    [("SpaceSuffix", [space, suffix])]
+  optDirection <- option "MaybeDirection" directionSpace
+  optSuffix <- option "MaybeSuffix" spaceSuffix
 
-ast :: Pinchot Char (Rule Char)
-ast = mdo
-  one <- terminal "One" (solo '1')
-  two <- terminal "Two" (solo '2')
-  three <- terminal "Three" (solo '3')
-  four <- terminal "Four" (solo '4')
-  five <- terminal "Five" (solo '5')
-  six <- terminal "Six" (solo '6')
-  seven <- terminal "Seven" (solo '7')
-  eight <- terminal "Eight" (solo '8')
-  nine <- terminal "Nine" (solo '9')
-  zero <- terminal "Zero" (solo '0')
-  digit <- nonTerminal "Digit" [("D0", [zero])
-    , ("D1", [one]), ("D2", [two]), ("D3", [three]), ("D4", [four])
-    , ("D5", [five]), ("D6", [six]), ("D7", [seven]), ("D8", [eight])
-    , ("D9", [nine])
-    ]
-  digits <- nonTerminal "Digits" [("DigitsEnd", []),
-    ("DigitsNext", [digit, digits])]
-  return digits
+  address <- nonTerminal "Address"
+    [("Address", [ number, space, optDirection, streetName, optSuffix,
+                   comma, space, city, comma, space, state,
+                   space, zipCode ])]
+  return address
+
 
 main :: IO ()
 main = do
-  allPinchotRulesToStdout "Char" ast
+  allPinchotRulesToStdout "Postal" "Char" (Just "Data.Char") postal
   sequence_ . replicate 4 $ putStrLn "--"
-  ancestorsToStdout "Char" ast
+  ancestorsToStdout "Postal" "Char" (Just "Data.Char") postal

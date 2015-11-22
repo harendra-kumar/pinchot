@@ -12,6 +12,7 @@ module Pinchot
   -- * Simple production rules
   , Pinchot
   , RuleName
+  , AlternativeName
   , Rule
   , terminal
   , terminalSeq
@@ -21,6 +22,7 @@ module Pinchot
   , list
   , list1
   , option
+  , wrap
 
   -- * Rendering rules to source code text
   , allPinchotRules
@@ -33,7 +35,7 @@ module Pinchot
 import Pinchot.Intervals
 
 import Control.Exception (Exception, throwIO)
-import Control.Monad (join)
+import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except (ExceptT, throwE, runExceptT)
@@ -60,6 +62,7 @@ data RuleType t
   | ROptional (Rule t)
   | RMany (Rule t)
   | RMany1 (Rule t)
+  | RWrap (Rule t)
   deriving (Eq, Ord, Show)
 
 -- | A single production rule.  It may be a terminal or a non-terminal.
@@ -70,8 +73,8 @@ data Branch t = Branch Text (Seq (Rule t))
   deriving (Eq, Ord, Show)
 
 data Names t = Names
-  { rules :: Map Text (RuleType t)
-  , branches :: Map Text (Seq (Rule t))
+  { tyConNames :: Set RuleName
+  , dataConNames :: Set Text
   , nextIndex :: Int
   , allRules :: Map Int (Rule t)
   } deriving (Eq, Ord, Show)
@@ -91,50 +94,67 @@ instance Exception Error
 
 -- | Constructs new 'Rule's.  @t@ is the type of the token; often this
 -- will be 'Char'.
-newtype Pinchot t a = Pinchot (ExceptT Error (State (Names t)) a)
+newtype Pinchot t a
+  = Pinchot { runPinchot :: (ExceptT Error (State (Names t)) a) }
   deriving (Functor, Applicative, Monad, MonadFix)
 
-newRule
+addRuleName
+  :: RuleName
+  -> Pinchot t ()
+addRuleName name = Pinchot $ do
+  old@(Names tyNames _ _ _) <- lift get
+  case X.uncons name of
+    Nothing -> throw
+    Just (x, _) -> do
+      when (not (isUpper x)) throw
+      when (Set.member name tyNames) throw
+      lift $ put (old { tyConNames = Set.insert name tyNames })
+  where
+    throw = throwE $ InvalidName name
+
+addDataConName
   :: Text
+  -> Pinchot t ()
+addDataConName name = Pinchot $ do
+  old@(Names _ dataConNames _ _) <- lift get
+  case X.uncons name of
+    Nothing -> throw
+    Just (x, _) -> do
+      when (not (isUpper x)) throw
+      when (Set.member name dataConNames) throw
+      lift $ put (old { dataConNames = Set.insert name dataConNames })
+  where
+    throw = throwE $ InvalidName name
+
+newRule
+  :: RuleName
   -> RuleType t
   -> Pinchot t ()
 newRule name ei = Pinchot $ do
+  runPinchot (addRuleName name)
   st <- lift get
-  if validName name st
-    then let newSt = st { rules = M.insert name ei (rules st)
-                        , nextIndex = succ (nextIndex st)
-                        , allRules = M.insert (nextIndex st) (Rule name ei)
+  let newSt = st { nextIndex = succ (nextIndex st)
+                 , allRules = M.insert (nextIndex st) (Rule name ei)
                             (allRules st)
-                        }
-         in lift (put newSt)
-    else throwE $ InvalidName name
-
-validName
-  :: Text
-  -> Names t
-  -> Bool
-validName name (Names rls bchs _ _) = case X.uncons name of
-  Nothing -> False
-  Just (x, _) ->
-    isUpper x && not (M.member name rls) && not (M.member name bchs)
-
-newBranch
-  :: Text
-  -> Seq (Rule t)
-  -> Pinchot t ()
-newBranch name rs = Pinchot $ do
-  st <- lift get
-  if validName name st
-    then let newSt = st { branches = M.insert name rs (branches st) }
-         in lift (put newSt)
-    else throwE $ InvalidName name
+                 }
+  lift (put newSt)
 
 -- | Type synonym for the name of a production rule.  
 -- This will be the name of the type constructor for the corresponding
 -- type in the AST, so this must be a valid Haskell type constructor
--- name.  The type constructor name must not collide with any other
--- type constructor name or data contstructor name.
+-- name.
+--
+-- If you are creating a 'terminal', 'option', 'list', 'list1', or
+-- 'wrap', the 'RuleName' will also be used for the name of the single
+-- data construtor.  If you are creating a 'nonTerminal', you will
+-- specify the name of each data constructor with 'AlternativeName'.
 type RuleName = Text
+
+-- | Type synonym the the name of an alternative in a 'nonTerminal'.
+-- This name must not conflict with any other data constructor, either
+-- one specified as an 'AlternativeName' or one that was created using
+-- 'terminal', 'option', 'list', or 'list1'.
+type AlternativeName = Text
 
 -- | Creates a terminal production rule.
 terminal
@@ -188,7 +208,7 @@ nonTerminal
   -> Pinchot t (Rule t)
 
 nonTerminal name sq = do
-  mapM (uncurry newBranch) sq
+  mapM addDataConName . fmap fst $ sq
   (b1, bs) <- splitNonTerminal name sq
   let branches = RBranch (uncurry Branch b1, fmap (uncurry Branch) bs)
   newRule name branches
@@ -230,8 +250,19 @@ option name r = do
   newRule name (ROptional r)
   return $ Rule name (ROptional r)
 
+-- | Creates a newtype wrapper.
+
+wrap
+  :: RuleName
+  -> Rule t
+  -- ^ The resulting 'Rule' simply wraps this 'Rule'.
+  -> Pinchot t (Rule t)
+wrap name r = do
+  newRule name (RWrap r)
+  return $ Rule name (RWrap r)
+
 derivers :: Text
-derivers = "  deriving (Eq, Ord, Show)"
+derivers = "  deriving (Eq, Ord, Show, Typeable)"
 
 printTerminal
   :: Show t
@@ -319,6 +350,16 @@ printMany1 name (Rule inner _)
     definition = X.unwords ["data", name, "=", name,
       inner, "(Seq " <> inner <> ")" ]
 
+printWrap
+  :: Text
+  -- ^ Type constructor name
+  -> Rule t
+  -> Text
+printWrap name (Rule inner _)
+  = X.unlines [definition, derivers]
+  where
+    definition = X.unwords ["newtype", name, "=", name, inner]
+
 printRule
   :: Show t
   => Text
@@ -332,17 +373,49 @@ printRule tyName (Rule name ei) = case ei of
   ROptional r -> printOptional name r
   RMany r -> printMany name r
   RMany1 r -> printMany1 name r
+  RWrap r -> printWrap name r
+
+astHeader
+  :: Text
+  -- ^ Module name
+  -> Maybe (Text, Text)
+  -- ^ Name of module to import the terminal type from, and the name
+  -- of the terminal type itself.  Use 'Nothing' if your terminal type
+  -- is in the Prelude.
+  -> Text
+astHeader name mayImportType = X.unlines $
+  [ "{-# LANGUAGE DeriveDataTypeable #-}"
+  , ""
+  , X.unwords ["module", name, "where"]
+  , ""
+  , "import Data.Sequence (Seq)"
+  , "import Data.Typeable (Typeable)"
+  ] ++ case mayImportType of
+          Nothing -> []
+          Just (mod, tyName) ->
+            [X.unwords ["import", mod, "(" <> tyName <> ")"]]
 
 printAllRules
   :: Show t
   => Text
+  -- ^ Module name
+  -> Text
   -- ^ Terminal type constructor name
+  -> Maybe Text
+  -- ^ Where to import the terminal type from
   -> Map Int (Rule t)
   -> Text
-printAllRules tyName = X.concat . intersperse "\n"
+printAllRules modName tyName mayTermMod
+  = X.concat
+  . intersperse "\n"
+  . (astHeader modName impTerminal :)
   . fmap (printRule tyName)
   . fmap snd
   . M.toAscList
+  where
+    impTerminal = case mayTermMod of
+      Nothing -> Nothing
+      Just termMod -> Just (termMod, tyName)
 
 -- | Creates code for the AST for all 'Rule's created in the
 -- 'Pinchot'.  The 'Rule's are shown in the order in which they were
@@ -350,14 +423,18 @@ printAllRules tyName = X.concat . intersperse "\n"
 allPinchotRules
   :: Show t
   => Text
+  -- ^ Module name
+  -> Text
   -- ^ Terminal type constructor name
+  -> Maybe Text
+  -- ^ Where to import the terminal type from
   -> Pinchot t a
   -> Either Error Text
-allPinchotRules tyName (Pinchot exc) = case eiErr of
+allPinchotRules modName tyName mayTermMod (Pinchot exc) = case eiErr of
   Left err -> Left err
-  Right _ -> Right $ printAllRules tyName (allRules st')
+  Right _ -> Right $ printAllRules modName tyName mayTermMod (allRules st')
   where
-    (eiErr, st') = flip runState (Names M.empty M.empty 0 M.empty)
+    (eiErr, st') = flip runState (Names Set.empty Set.empty 0 M.empty)
       . runExceptT $ exc
 
 handleError
@@ -372,10 +449,15 @@ handleError e = case e of
 allPinchotRulesToStdout
   :: Show t
   => Text
+  -- ^ Module name
+  -> Text
   -- ^ Terminal type constructor name
+  -> Maybe Text
+  -- ^ Where to import the terminal type from
   -> Pinchot t a
   -> IO ()
-allPinchotRulesToStdout tyName p = handleError $ allPinchotRules tyName p
+allPinchotRulesToStdout modName tyName mayTermMod p = handleError
+  $ allPinchotRules modName tyName mayTermMod p
 
 -- | Gets all ancestor 'Rule's.  Skips duplicates.
 getAncestors
@@ -403,6 +485,9 @@ getAncestors r@(Rule name ei) = do
         RMany1 r -> do
           cs <- getAncestors r
           return $ r <| cs
+        RWrap r -> do
+          cs <- getAncestors r
+          return $ r <| cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
@@ -412,23 +497,31 @@ getAncestors r@(Rule name ei) = do
 ancestors
   :: Show t
   => Text
+  -- ^ Module name
+  -> Text
   -- ^ Terminal type constructor name
+  -> Maybe Text
+  -- ^ Where to import the terminal type from
   -> Pinchot t (Rule t)
   -> Either Error Text
-ancestors tyName (Pinchot exc) = case eiErr of
+ancestors modName tyName mayTermMod (Pinchot exc) = case eiErr of
   Left err -> Left err
   Right rule ->
     Right
     . X.concat
     . intersperse "\n"
+    . (astHeader modName impTerminal :)
     . fmap (printRule tyName)
     . toList
     . ancies
     $ rule
   where
-    (eiErr, _) = flip runState (Names M.empty M.empty 0 M.empty)
+    (eiErr, _) = flip runState (Names Set.empty Set.empty 0 M.empty)
       . runExceptT $ exc
     ancies rule = fst $ runState (getAncestors rule) Set.empty
+    impTerminal = case mayTermMod of
+      Nothing -> Nothing
+      Just termMod -> Just (termMod, tyName)
 
 
 -- | Like 'ancestors' but prints results to standard output.  Throws
@@ -437,7 +530,12 @@ ancestors tyName (Pinchot exc) = case eiErr of
 ancestorsToStdout
   :: Show t
   => Text
+  -- ^ Module name
+  -> Text
   -- ^ Terminal type constructor name
+  -> Maybe Text
+  -- ^ Where to import the terminal type from
   -> Pinchot t (Rule t)
   -> IO ()
-ancestorsToStdout tyName p = handleError $ ancestors tyName p
+ancestorsToStdout modName tyName mayTermMod p
+  = handleError $ ancestors modName tyName mayTermMod p
