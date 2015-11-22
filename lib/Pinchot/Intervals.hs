@@ -1,103 +1,56 @@
--- | Helpers for dealing with intervals.
-module Pinchot.Intervals
-  ( -- * Single interval
-    Interval(..)
-  , singleton
-  , range
-  , endLeft
-  , endRight
-  , members
-  , uniqueMembers
-  , inInterval
-  , sortIntervals
-  , standardize
-  , flatten
-  , removeExcludes
-  , intervalToTuple
+{-# LANGUAGE OverloadedLists #-}
+module Pinchot.Intervals' where
 
-  -- * Collection of intervals
-  , Intervals(..)
-  , emptyIntervals
-  , included
-  , alone
-  , addIncluded
-  , addExcluded
-  , remove
-  , splitIntervals
-  , inIntervals
-  , intervalsToTuples
-  ) where
+import Control.Monad (join)
+import Data.Monoid ((<>))
+import Data.Ord (comparing)
+import Data.Sequence (Seq, ViewL(EmptyL, (:<)), viewl, (<|))
+import qualified Data.Sequence as Seq
 
-import Data.Ord
-import Data.Monoid
-import Data.List (sortBy, nub, sort)
-import Pinchot.Intervals.Interval
-
--- | A collection of 'Interval'.
 data Intervals a = Intervals
-  { includedIntervals :: [Interval a]
-  -- ^ Every member of each of these 'Interval' is a member of the
-  -- 'Intervals', except for the 'excludedIntervals'.
-  , excludedIntervals :: [Interval a]
-  -- ^ Every member of these 'Interval' is not a member of the
-  -- 'Intervals', even if they are members of 'includedIntervals'.
+  { included :: Seq (a, a)
+  , excluded :: Seq (a, a)
   } deriving (Eq, Ord, Show)
 
--- | Initialize an 'Intervals' with an empty 'excludedIntervals' list
--- and a list of these 'includedIntervals'.
-included :: [Interval a] -> Intervals a
-included ls = Intervals ls []
-
--- | Initialize an 'Intervals' with a single member and no excludes.
-alone :: a -> Intervals a
-alone a = Intervals [singleton a] []
+instance Functor Intervals where
+  fmap f (Intervals a b) = Intervals (fmap g a) (fmap g b)
+    where
+      g (x, y) = (f x, f y)
 
 instance Monoid (Intervals a) where
-  mempty = Intervals [] []
-  mappend (Intervals x1 y1) (Intervals x2 y2)
+  mempty = Intervals mempty mempty
+  (Intervals x1 y1) `mappend` (Intervals x2 y2)
     = Intervals (x1 <> x2) (y1 <> y2)
 
-instance Functor Intervals where
-  fmap f (Intervals i e) = Intervals (fmap (fmap f) i)
-                                     (fmap (fmap f) e)
+include :: a -> a -> Intervals a
+include l h = Intervals [(l, h)] []
 
--- | An 'Intervals' with no members.
-emptyIntervals :: Intervals a
-emptyIntervals = Intervals [] []
+exclude :: a -> a -> Intervals a
+exclude l h = Intervals [] [(l, h)]
 
--- | Adds an 'Interval' to the 'includedIntervals'.
-addIncluded :: Interval a -> Intervals a -> Intervals a
-addIncluded i (Intervals is es) = Intervals (i:is) es
+solo :: a -> Intervals a
+solo x = Intervals [(x, x)] []
 
--- | Adds an 'Interval' to the 'excludedIntervals'.
-addExcluded :: Interval a -> Intervals a -> Intervals a
-addExcluded i (Intervals is es) = Intervals is (i:es)
+pariah :: a -> Intervals a
+pariah x = Intervals [] [(x, x)]
 
--- | @remove a b@ produces a new 'Intervals' which includes the
--- include list of @a@, with any members of @b@ added to the exclude
--- list.  Use this infix.
-remove :: (Enum a, Ord a) => Intervals a -> Intervals a -> Intervals a
-remove (Intervals inc exc) toRemove = Intervals inc (exc ++ newRemoves)
-  where
-    newRemoves = splitIntervals toRemove
+endLeft :: Ord a => (a, a) -> a
+endLeft (a, b) = min a b
 
--- | True if this point a member of the 'Interval'.
-inInterval :: Ord a => a -> Interval a -> Bool
-inInterval x i = (x >= endLeft i) && (x <= endRight i)
+endRight :: Ord a => (a, a) -> a
+endRight (a, b) = max a b
 
--- | All members of an 'Interval'.
-members :: (Ord a, Enum a) => Interval a -> [a]
-members i = [endLeft i .. endRight i]
+inInterval :: Ord a => a -> (a, a) -> Bool
+inInterval x i = x >= endLeft i && x <= endRight i
 
--- | All members of a list of 'Interval'; sorted with duplicates
--- removed.
-uniqueMembers :: (Ord a, Enum a) => [Interval a] -> [a]
-uniqueMembers = nub . sort . concatMap members
+members :: (Ord a, Enum a) => (a, a) -> Seq a
+members i = Seq.fromList [endLeft i .. endRight i]
 
--- | Sorts intervals, first by the left endpoint and then by the right
--- endpoint if the left endpoint is equal.
-sortIntervals :: Ord a => [Interval a] -> [Interval a]
-sortIntervals = sortBy (comparing endLeft <> comparing endRight)
+sortIntervalSeq :: Ord a => Seq (a, a) -> Seq (a, a)
+sortIntervalSeq = Seq.sortBy (comparing endLeft <> comparing endRight)
+
+standardizeInterval :: Ord a => (a, a) -> (a, a)
+standardizeInterval (a, b) = (min a b, max a b)
 
 -- | Sorts the intervals using 'sortIntervals' and presents them in a
 -- regular order using 'flatten'.  The function @standardize a@ has
@@ -119,24 +72,26 @@ sortIntervals = sortBy (comparing endLeft <> comparing endRight)
 -- The second property means that adjacent intervals in the list must
 -- be separated by at least one point on the number line.
 
-standardize :: (Ord a, Enum a) => [Interval a] -> [Interval a]
-standardize = flatten . sortIntervals
+standardizeIntervalSeq :: (Ord a, Enum a) => Seq (a, a) -> Seq (a, a)
+standardizeIntervalSeq = flattenIntervalSeq . sortIntervalSeq
 
 -- | Presents the intervals in a standard order, as described in
 -- 'standardize'.  If the input has already been sorted with
 -- 'sortIntervals', the same properties for 'standardize' hold for
 -- this function.  Otherwise, its properties are undefined.
-flatten :: (Ord a, Enum a) => [Interval a] -> [Interval a]
-flatten = go Nothing
+flattenIntervalSeq :: (Ord a, Enum a) => Seq (a, a) -> Seq (a, a)
+flattenIntervalSeq = fmap standardizeInterval . go Nothing
   where
-    go Nothing [] = []
-    go (Just i) [] = [i]
-    go Nothing (x:xs) = go (Just x) xs
-    go (Just curr) (x:xs)
-      | endRight curr < endLeft x
-          && endRight curr < pred (endLeft x) = curr : go (Just x) xs
-      | otherwise = go (Just (range (endLeft curr)
-          (max (endRight curr) (endRight x)))) xs
+    go mayCurr sq = case (mayCurr, viewl sq) of
+      (Nothing, EmptyL) -> []
+      (Just i, EmptyL) -> [i]
+      (Nothing, x :< xs) -> go (Just x) xs
+      (Just curr, x :< xs)
+        | endRight curr < endLeft x
+            && endRight curr < pred (endLeft x) -> curr <| go (Just x) xs
+        | otherwise -> go (Just (endLeft curr,
+            max (endRight curr) (endRight x))) xs
+
 
 {- |
 Removes excluded members from a list of 'Interval'.  The
@@ -146,8 +101,8 @@ following properties hold:
 
 removeProperties
   :: (Ord a, Enum a)
-  => [Interval a]
-  -> [Interval a]
+  => Seq (a, a)
+  -> Seq (a, a)
   -> [Bool]
 removeProperties inc exc =
 
@@ -176,57 +131,65 @@ removeProperties inc exc =
 -}
 removeExcludes
   :: (Ord a, Enum a)
-  => [Interval a]
+  => Seq (a, a)
   -- ^ Included intervals (not necessarily sorted)
-  -> [Interval a]
+  -> Seq (a, a)
   -- ^ Excluded intervals (not necessarily sorted)
-  -> [Interval a]
+  -> Seq (a, a)
 removeExcludes inc = foldr remover inc
+
+remover
+  :: (Ord a, Enum a)
+  => (a, a)
+  -- ^ Remove this interval
+  -> Seq (a, a)
+  -- ^ From this sequence of intervals
+  -> Seq (a, a)
+remover ivl = join . fmap squash . fmap (removeInterval ivl)
   where
-    remover ivl ivls = concatMap rmve ivls
-      where
-        rmve oldIvl = concat [onLeft, onRight]
-          where
-            onLeft
-              | endLeft ivl > endLeft oldIvl =
-                  [range (endLeft oldIvl)
-                            (min (pred (endLeft ivl)) (endRight oldIvl))]
-              | otherwise = []
-            onRight
-              | endRight ivl < endRight oldIvl =
-                  [range (max (succ (endRight ivl)) (endLeft oldIvl))
-                            (endRight oldIvl)]
-              | otherwise = []
+    squash (Nothing, Nothing) = Seq.empty
+    squash (Just x, Nothing) = Seq.singleton x
+    squash (Nothing, Just x) = Seq.singleton x
+    squash (Just x, Just y) = x <| y <| Seq.empty
+
+-- | Removes a single interval from a single other interval.  Returns
+-- a sequence of intervals, which always
+removeInterval
+  :: (Ord a, Enum a)
+  => (a, a)
+  -- ^ Remove this interval
+  -> (a, a)
+  -- ^ From this interval
+  -> (Maybe (a, a), Maybe (a, a))
+removeInterval ivl oldIvl = (onLeft, onRight)
+  where
+    onLeft
+      | endLeft ivl > endLeft oldIvl =
+          Just ( endLeft oldIvl
+               , min (pred (endLeft ivl)) (endRight oldIvl))
+      | otherwise = Nothing
+    onRight
+      | endRight ivl < endRight oldIvl =
+          Just ( max (succ (endRight ivl)) (endLeft oldIvl)
+               , endRight oldIvl)
+      | otherwise = Nothing
+
+standardizeIntervals
+  :: (Ord a, Enum a)
+  => Intervals a
+  -> Intervals a
+standardizeIntervals (Intervals i e)
+  = Intervals (standardizeIntervalSeq i) (standardizeIntervalSeq e)
 
 -- | Sorts the intervals using 'standardize', and then removes the
 -- excludes with 'removeExcludes'.
 splitIntervals
   :: (Ord a, Enum a)
   => Intervals a
-  -> [Interval a]
-splitIntervals (Intervals is es) = removeExcludes (standardize is) es
+  -> Seq (a, a)
+splitIntervals (Intervals is es)
+  = removeExcludes (standardizeIntervalSeq is) es
 
 -- | 'True' if the given element is a member of the 'Intervals'.
 inIntervals :: (Enum a, Ord a) => a -> Intervals a -> Bool
 inIntervals a = any (inInterval a) . splitIntervals
-
-{- |
-
-Converts an interval to a tuple, with the bottom of the range being
-the first element and the top being the second element.  That is, the
-following property holds:
-
-@
-\x -> let (a, b) = intervalToTuple x in a <= b
-@
--}
-intervalToTuple :: Ord a => Interval a -> (a, a)
-intervalToTuple i = (endLeft i, endRight i)
-
--- | Same as
---
--- @
--- map 'intervalToTuple' . 'splitIntervals'
--- @
-intervalsToTuples :: (Ord a, Enum a) => Intervals a -> [(a, a)]
-intervalsToTuples = map intervalToTuple . splitIntervals
