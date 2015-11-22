@@ -10,6 +10,7 @@ module Pinchot
   , Rule
   , Pinchot
   , terminal
+  , terminalSeq
   , nonTerminal
   , allPinchotRules
   , allPinchotRulesToStdout
@@ -41,15 +42,21 @@ import qualified Data.Text as X
 import qualified Data.Text.IO as XIO
 import Data.Typeable (Typeable)
 
+data RuleType t
+  = RTerminal (Intervals t)
+  | RBranch (Branch t, Seq (Branch t))
+  | RSeqTerm (Seq t)
+  deriving (Eq, Ord, Show)
+
 -- | A single production rule.  It may be a terminal or a non-terminal.
-data Rule t = Rule Text (Either (Intervals t) (Branch t, Seq (Branch t)))
+data Rule t = Rule Text (RuleType t)
   deriving (Eq, Ord, Show)
 
 data Branch t = Branch Text (Seq (Rule t))
   deriving (Eq, Ord, Show)
 
 data Names t = Names
-  { rules :: Map Text (Either (Intervals t) (Branch t, Seq (Branch t)))
+  { rules :: Map Text (RuleType t)
   , branches :: Map Text (Seq (Rule t))
   , nextIndex :: Int
   , allRules :: Map Int (Rule t)
@@ -75,7 +82,7 @@ newtype Pinchot t a = Pinchot (ExceptT Error (State (Names t)) a)
 
 newRule
   :: Text
-  -> Either (Intervals t) (Branch t, Seq (Branch t))
+  -> RuleType t
   -> Pinchot t ()
 newRule name ei = Pinchot $ do
   st <- lift get
@@ -121,8 +128,8 @@ terminal
   -> Pinchot t (Rule t)
 
 terminal name ivls = do
-  newRule name (Left ivls)
-  return $ Rule name (Left ivls)
+  newRule name (RTerminal ivls)
+  return $ Rule name (RTerminal ivls)
 
 splitNonTerminal
   :: Text
@@ -131,6 +138,24 @@ splitNonTerminal
 splitNonTerminal n sq = Pinchot $ case viewl sq of
   EmptyL -> throwE $ EmptyNonTerminal n
   x :< xs -> return (x, xs)
+
+-- | Creates a production for a sequence of terminals.  Useful for
+-- parsing specific words.
+terminalSeq
+
+  :: Text
+  -- ^ This is the name of the type constructor.  It will also be used
+  -- for the name of the data constructor (it will be a @newtype@ that
+  -- wraps a @Seq@ of the terminal type).
+
+  -> Seq t
+  -- ^ Sequence of terminal symbols to recognize
+
+  -> Pinchot t (Rule t)
+
+terminalSeq name sq = do
+  newRule name (RSeqTerm sq)
+  return $ Rule name (RSeqTerm sq)
 
 -- | Creates a new non-terminal production rule.
 nonTerminal
@@ -154,7 +179,7 @@ nonTerminal
 nonTerminal name sq = do
   mapM (uncurry newBranch) sq
   (b1, bs) <- splitNonTerminal name sq
-  let branches = Right (uncurry Branch b1, fmap (uncurry Branch) bs)
+  let branches = RBranch (uncurry Branch b1, fmap (uncurry Branch) bs)
   newRule name branches
   return $ Rule name branches
 
@@ -170,7 +195,7 @@ printTerminal tyName name ivls
   = X.unlines [ openCom, com, closeCom, nt, derive ]
   where
     openCom = "{- Terminal from"
-    com = "    " <> X.pack (show ivls)
+    com = "   " <> X.pack (show ivls)
     closeCom = "-}"
     nt = X.unwords ["newtype", name, "=", name, tyName]
     derive = "  deriving (Eq, Ord, Show)"
@@ -195,6 +220,24 @@ printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
     linesRest = printBranch True b1 : toList (fmap (printBranch False) bs)
       <> ["  deriving (Eq, Ord, Show)\n"]
 
+printSeqTerm
+  :: Show t
+  => Text
+  -- ^ Type constructor name of terminal
+  -> Text
+  -- ^ Type constructor name of rule
+  -> Seq t
+  -> Text
+printSeqTerm tyName name sq
+  = X.unlines [opCom, showSeq, closeCom, definition, derivers]
+  where
+    opCom = "{- Sequence of terminals"
+    closeCom = "-}"
+    showSeq = "  " <> X.pack (show sq)
+    definition = X.unwords ["newtype", name, "=", name,
+                            "( Seq " <> tyName <> ")" ]
+    derivers = "  deriving (Eq, Ord, Show)"
+
 printRule
   :: Show t
   => Text
@@ -202,8 +245,9 @@ printRule
   -> Rule t
   -> Text
 printRule tyName (Rule name ei) = case ei of
-  Left term -> printTerminal tyName name term
-  Right nonTerm -> printNonTerminal name nonTerm
+  RTerminal term -> printTerminal tyName name term
+  RBranch nonTerm -> printNonTerminal name nonTerm
+  RSeqTerm sq -> printSeqTerm tyName name sq
 
 printAllRules
   :: Show t
@@ -260,11 +304,12 @@ getAncestors r@(Rule name ei) = do
     else do
       put (Set.insert name set)
       case ei of
-        Left _ -> return (Seq.singleton r)
-        Right (b1, bs) -> do
+        RTerminal _ -> return (Seq.singleton r)
+        RBranch (b1, bs) -> do
           as1 <- branchAncestors b1
           ass <- fmap join . mapM branchAncestors $ bs
           return $ r <| as1 <> ass
+        RSeqTerm _ -> return (Seq.singleton r)
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 

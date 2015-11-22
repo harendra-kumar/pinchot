@@ -3,6 +3,19 @@ module Main where
 
 import Pinchot
 
+import Data.Monoid ((<>))
+
+-- | A grammar for simple postal addresses.  This example would never
+-- hold up to real-world usage but it gives you a flavor of how
+-- Pinchot works.
+postal :: Pinchot Char (Rule Char)
+postal = mdo
+  digit <- terminal "Digit" (include '0' '9')
+  digits <- nonTerminal "Digits"
+    [("DigitsEnd", []), ("DigitsNext", [digit, digits])]
+  letter <- terminal "Letter" (include 'a' 'z' <> include 'A' 'Z')
+  return letter
+
 ast :: Pinchot Char (Rule Char)
 ast = mdo
   one <- terminal "One" (solo '1')
