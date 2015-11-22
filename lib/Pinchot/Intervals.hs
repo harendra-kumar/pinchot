@@ -7,9 +7,20 @@ import Data.Ord (comparing)
 import Data.Sequence (Seq, ViewL(EmptyL, (:<)), viewl, (<|))
 import qualified Data.Sequence as Seq
 
+-- | Groups of terminals.  Create an 'Intervals' using 'include',
+-- 'exclude', 'solo' and 'pariah'.  Combine 'Intervals' using
+-- 'mappend', which will combine both the included and excluded
+-- terminal symbols from each operand.
 data Intervals a = Intervals
   { included :: Seq (a, a)
+  -- ^ Each pair @(a, b)@ is an inclusive range of terminal symbols,
+  -- in order.  For instance, @('a', 'c')@ includes the characters
+  -- @'a'@, @'b'@, and @'c'@.  The 'included' sequence contains all
+  -- terminals that are included in the 'Intervals', except for those
+  -- that are 'excluded'.
   , excluded :: Seq (a, a)
+  -- ^ Each symbol in 'excluded' is not in the 'Intervals', even if
+  -- the symbol is 'included'.
   } deriving (Eq, Ord, Show)
 
 instance Functor Intervals where
@@ -22,38 +33,52 @@ instance Monoid (Intervals a) where
   (Intervals x1 y1) `mappend` (Intervals x2 y2)
     = Intervals (x1 <> x2) (y1 <> y2)
 
+-- | Include a range of symbols in the 'Intervals'.  For instance, to
+-- include the characters @'a'@, @'b'@, and @'c'@, use @include 'a'
+-- 'c'@.
 include :: a -> a -> Intervals a
 include l h = Intervals [(l, h)] []
 
+-- | Exclude a range of symbols in the 'Intervals'.  Each symbol that
+-- is 'exclude'd is not included in the 'Intervals', even if it is
+-- also 'include'd.
 exclude :: a -> a -> Intervals a
 exclude l h = Intervals [] [(l, h)]
 
+-- | Include a single symbol.
 solo :: a -> Intervals a
 solo x = Intervals [(x, x)] []
 
+-- | Exclude a single symbol.
 pariah :: a -> Intervals a
 pariah x = Intervals [] [(x, x)]
 
+-- | Left endpoint.
 endLeft :: Ord a => (a, a) -> a
 endLeft (a, b) = min a b
 
+-- | Right endpoint.
 endRight :: Ord a => (a, a) -> a
 endRight (a, b) = max a b
 
+-- | Is this symbol included in the interval?
 inInterval :: Ord a => a -> (a, a) -> Bool
 inInterval x i = x >= endLeft i && x <= endRight i
 
+-- | Enumerate all members of an interval.
 members :: (Ord a, Enum a) => (a, a) -> Seq a
 members i = Seq.fromList [endLeft i .. endRight i]
 
+-- | Sort a sequence of intervals.
 sortIntervalSeq :: Ord a => Seq (a, a) -> Seq (a, a)
 sortIntervalSeq = Seq.sortBy (comparing endLeft <> comparing endRight)
 
+-- | Arrange an interval so the lower bound is first in the pair.
 standardizeInterval :: Ord a => (a, a) -> (a, a)
 standardizeInterval (a, b) = (min a b, max a b)
 
--- | Sorts the intervals using 'sortIntervals' and presents them in a
--- regular order using 'flatten'.  The function @standardize a@ has
+-- | Sorts the intervals using 'sortIntervalSeq' and presents them in a
+-- regular order using 'flatten'.  The function @standardizeIntervalSeq a@ has
 -- the following properties, where @b@ is the result:
 --
 -- @
@@ -76,8 +101,8 @@ standardizeIntervalSeq :: (Ord a, Enum a) => Seq (a, a) -> Seq (a, a)
 standardizeIntervalSeq = flattenIntervalSeq . sortIntervalSeq
 
 -- | Presents the intervals in a standard order, as described in
--- 'standardize'.  If the input has already been sorted with
--- 'sortIntervals', the same properties for 'standardize' hold for
+-- 'standardizeIntervalSeq'.  If the input has already been sorted with
+-- 'sortIntervalSeq', the same properties for 'standardizeIntervalSeq' hold for
 -- this function.  Otherwise, its properties are undefined.
 flattenIntervalSeq :: (Ord a, Enum a) => Seq (a, a) -> Seq (a, a)
 flattenIntervalSeq = fmap standardizeInterval . go Nothing
@@ -174,6 +199,8 @@ removeInterval ivl oldIvl = (onLeft, onRight)
                , endRight oldIvl)
       | otherwise = Nothing
 
+-- | Runs 'standardizeIntervalSeq' on the 'included' and 'excluded'
+-- intervals.
 standardizeIntervals
   :: (Ord a, Enum a)
   => Intervals a
@@ -181,7 +208,7 @@ standardizeIntervals
 standardizeIntervals (Intervals i e)
   = Intervals (standardizeIntervalSeq i) (standardizeIntervalSeq e)
 
--- | Sorts the intervals using 'standardize', and then removes the
+-- | Sorts the intervals using 'standardizeIntervalSeq', and then removes the
 -- excludes with 'removeExcludes'.
 splitIntervals
   :: (Ord a, Enum a)
