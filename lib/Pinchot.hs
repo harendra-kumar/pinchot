@@ -29,6 +29,7 @@ module Pinchot
   , allPinchotRulesToStdout
   , ancestors
   , ancestorsToStdout
+  , earleyParser
   , Error(..)
   ) where
 
@@ -539,3 +540,18 @@ ancestorsToStdout
   -> IO ()
 ancestorsToStdout modName tyName mayTermMod p
   = handleError $ ancestors modName tyName mayTermMod p
+
+-- | Generates a parser for use with the @Earley@ package.
+earleyParser
+  :: Text
+  -- ^ Module name for the resulting parser
+  -> Text
+  -- ^ Terminal type constructor name.  Often this will be 'Char'.
+  -> Maybe Text
+  -- ^ Where to import the terminal type from.  Use 'Nothing' if your
+  -- terminal type is already in the Prelude.
+  -> Text
+  -- ^ Where to import the AST from
+  -> Pinchot t (Rule t)
+  -> Either Error Text
+earleyParser = undefined
