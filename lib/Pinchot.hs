@@ -24,12 +24,16 @@ module Pinchot
   , option
   , wrap
 
+  -- * Sequence type constructor
+  , Seq
+
   -- * Rendering rules to source code text
   , allPinchotRules
   , allPinchotRulesToStdout
   , ancestors
   , ancestorsToStdout
   , earleyParser
+  , makeAst
   , Error(..)
   ) where
 
@@ -51,10 +55,12 @@ import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|))
 import qualified Data.Sequence as Seq
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 import qualified Data.Text as X
 import qualified Data.Text.IO as XIO
 import Data.Typeable (Typeable)
+
+import Language.Haskell.TH
 
 data RuleType t
   = RTerminal (Intervals t)
@@ -555,3 +561,85 @@ earleyParser
   -> Pinchot t (Rule t)
   -> Either Error Text
 earleyParser = undefined
+
+--
+-- # Template Haskell - experimental
+--
+
+thBranch :: Branch t -> ConQ
+thBranch (Branch nm rules) = normalC name fields
+  where
+    name = mkName (unpack nm)
+    mkField (Rule n _) = strictType notStrict (conT (mkName (unpack n)))
+    fields = toList . fmap mkField $ rules
+
+
+thRule :: Text -> Rule t -> DecQ
+thRule typeName (Rule nm ruleType) = case ruleType of
+
+  RTerminal _ -> newtypeD (cxt []) name [] newtypeCon derives
+    where
+      newtypeCon = normalC name
+        [strictType notStrict (conT (mkName (unpack typeName)))]
+
+  RBranch (b1, bs) -> dataD (cxt []) name [] cons derives
+    where
+      cons = thBranch b1 : toList (fmap thBranch bs)
+
+  RSeqTerm _ -> dataD (cxt []) name [] cons derives
+    where
+      cons = [normalC name
+        [strictType notStrict (appT (conT (mkName "Seq"))
+                                    (conT (mkName (unpack typeName))))]]
+
+  ROptional (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
+    where
+      newtypeCon = normalC name
+        [strictType notStrict (appT (conT (mkName "Maybe"))
+                                    (conT (mkName (unpack inner))))]
+
+  RMany (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
+    where
+      newtypeCon = normalC name
+        [strictType notStrict (appT (conT (mkName "Seq"))
+                                    (conT (mkName (unpack inner))))]
+
+  RMany1 (Rule inner _) -> dataD (cxt []) name [] [cons] derives
+    where
+      cons = normalC name
+        [ strictType notStrict (conT (mkName (unpack inner)))
+        , strictType notStrict (appT (conT (mkName "Seq"))
+                                     (conT (mkName (unpack inner))))]
+
+  RWrap (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
+    where
+      newtypeCon = normalC name
+        [ strictType notStrict (conT (mkName (unpack inner))) ]
+
+
+  where
+    name = mkName (unpack nm)
+    derives = map mkName ["Eq", "Ord", "Show"]
+
+thAllRules
+  :: Text
+  -- ^ Terminal type constructor name
+  -> Map Int (Rule t)
+  -> DecsQ
+thAllRules typeName
+  = sequence
+  . fmap (thRule typeName)
+  . fmap snd
+  . M.toAscList
+
+makeAst
+  :: Text
+  -- ^ Terminal type constructor name
+  -> Pinchot t a
+  -> DecsQ
+makeAst typeName pinchot = case ei of
+  Left err -> fail $ "pinchot: bad grammar: " ++ show err
+  Right _ -> thAllRules typeName (allRules st')
+  where
+    (ei, st') = runState (runExceptT (runPinchot pinchot))
+      (Names Set.empty Set.empty 0 M.empty)

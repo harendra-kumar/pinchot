@@ -23,6 +23,9 @@ text = atleast "text" [1,2,1,3]
 transformers :: Package
 transformers = atleast "transformers" [0,4,2,0]
 
+templateHaskell :: Package
+templateHaskell = atleast "template-haskell" [2,10]
+
 commonOptions :: HasBuildInfo a => [a]
 commonOptions =
   [ ghcOptions ["-W"]
@@ -31,7 +34,7 @@ commonOptions =
   ]
 
 libraryDepends :: [Package]
-libraryDepends = [ base, containers, text, transformers ]
+libraryDepends = [ base, containers, text, transformers, templateHaskell ]
 
 props :: Properties
 props = blank
@@ -72,8 +75,9 @@ main = defaultMain $ do
     , [ githubHead "massysett" "penny"
       , executable "grower" ( mainIs "grower.hs"
                               : buildDepends libraryDepends
-                              : otherModules libMods
+                              : otherModules ("Postal" : libMods)
                               : hsSourceDirs ["grower"]
+                              : otherExtensions ["TemplateHaskell"]
                               : commonOptions
                             )
       ]
