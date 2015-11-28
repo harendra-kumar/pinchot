@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Pinchot
   ( -- * Intervals
     Intervals
@@ -589,26 +590,26 @@ thRule typeName (Rule nm ruleType) = case ruleType of
   RSeqTerm _ -> dataD (cxt []) name [] cons derives
     where
       cons = [normalC name
-        [strictType notStrict (appT (conT (mkName "Seq"))
+        [strictType notStrict (appT [t| Seq |]
                                     (conT typeName))]]
 
   ROptional (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
-        [strictType notStrict (appT (conT (mkName "Maybe"))
+        [strictType notStrict (appT [t| Maybe |]
                                     (conT (mkName (unpack inner))))]
 
   RMany (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
-        [strictType notStrict (appT (conT (mkName "Seq"))
+        [strictType notStrict (appT [t| Seq |]
                                     (conT (mkName (unpack inner))))]
 
   RMany1 (Rule inner _) -> dataD (cxt []) name [] [cons] derives
     where
       cons = normalC name
         [ strictType notStrict (conT (mkName (unpack inner)))
-        , strictType notStrict (appT (conT (mkName "Seq"))
+        , strictType notStrict (appT [t| Seq |]
                                      (conT (mkName (unpack inner))))]
 
   RWrap (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
