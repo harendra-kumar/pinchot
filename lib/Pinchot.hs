@@ -28,19 +28,16 @@ module Pinchot
   -- * Sequence type constructor
   , Seq
 
-  -- * Rendering rules to source code text
-  , allPinchotRules
-  , allPinchotRulesToStdout
-  , ancestors
-  , ancestorsToStdout
+  -- * Transforming an AST to code
   , earleyParser
-  , makeAst
+  , allRulesToCode
+  , ruleTreeToCode
   , Error(..)
   ) where
 
 import Pinchot.Intervals
 
-import Control.Exception (Exception, throwIO)
+import Control.Exception (Exception)
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
@@ -48,7 +45,6 @@ import Control.Monad.Trans.Except (ExceptT, throwE, runExceptT)
 import Control.Monad.Trans.State (State, runState, get, put)
 import Data.Char (isUpper)
 import Data.Foldable (toList)
-import Data.List (intersperse)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid ((<>))
@@ -58,7 +54,6 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text, unpack)
 import qualified Data.Text as X
-import qualified Data.Text.IO as XIO
 import Data.Typeable (Typeable)
 
 import Language.Haskell.TH
@@ -269,204 +264,6 @@ wrap name r = do
   newRule name (RWrap r)
   return $ Rule name (RWrap r)
 
-derivers :: Text
-derivers = "  deriving (Eq, Ord, Show, Typeable)"
-
-printTerminal
-  :: Show t
-  => Text
-  -- ^ Type constructor name of terminal
-  -> Text
-  -- ^ Terminal name
-  -> Intervals t
-  -> Text
-printTerminal tyName name ivls
-  = X.unlines [ openCom, com, closeCom, nt, derivers ]
-  where
-    openCom = "{- Terminal from"
-    com = "   " <> X.pack (show ivls)
-    closeCom = "-}"
-    nt = X.unwords ["newtype", name, "=", name, tyName]
-
-printBranch
-  :: Bool
-  -- ^ True if this is the first branch
-  -> Branch t
-  -> Text
-printBranch first (Branch name rules) = X.unwords (leader : name : rest) <> "\n"
-  where
-    leader = "  " <> if first then "=" else "|"
-    rest = toList . fmap (\(Rule x _) -> x) $ rules
-
-printNonTerminal
-  :: Text
-  -> (Branch t, Seq (Branch t))
-  -> Text
-printNonTerminal name (b1, bs) = X.concat (line1 : linesRest)
-  where
-    line1 = "data " <> name <> "\n"
-    linesRest = printBranch True b1 : toList (fmap (printBranch False) bs)
-      <> [derivers <> "\n"]
-
-printSeqTerm
-  :: Show t
-  => Text
-  -- ^ Type constructor name of terminal
-  -> Text
-  -- ^ Type constructor name of rule
-  -> Seq t
-  -> Text
-printSeqTerm tyName name sq
-  = X.unlines [opCom, showSeq, closeCom, definition, derivers]
-  where
-    opCom = "{- Sequence of terminals"
-    closeCom = "-}"
-    showSeq = "  " <> X.pack (show sq)
-    definition = X.unwords ["newtype", name, "=", name,
-                            "(Seq " <> tyName <> ")" ]
-
-printOptional
-  :: Text
-  -- ^ Type constructor name
-  -> Rule t
-  -> Text
-printOptional name (Rule inner _)
-  = X.unlines [definition, derivers]
-  where
-    definition = X.unwords ["newtype", name, "=", name,
-      "(Maybe " <> inner <> ")" ]
-
-printMany
-  :: Text
-  -- ^ Type constructor name
-  -> Rule t
-  -> Text
-printMany name (Rule inner _)
-  = X.unlines [definition, derivers]
-  where
-    definition = X.unwords ["newtype", name, "=", name,
-      "(Seq " <> inner <> ")" ]
-
-printMany1
-  :: Text
-  -- ^ Type constructor name
-  -> Rule t
-  -> Text
-printMany1 name (Rule inner _)
-  = X.unlines [definition, derivers]
-  where
-    definition = X.unwords ["data", name, "=", name,
-      inner, "(Seq " <> inner <> ")" ]
-
-printWrap
-  :: Text
-  -- ^ Type constructor name
-  -> Rule t
-  -> Text
-printWrap name (Rule inner _)
-  = X.unlines [definition, derivers]
-  where
-    definition = X.unwords ["newtype", name, "=", name, inner]
-
-printRule
-  :: Show t
-  => Text
-  -- ^ Terminal type constructor name
-  -> Rule t
-  -> Text
-printRule tyName (Rule name ei) = case ei of
-  RTerminal term -> printTerminal tyName name term
-  RBranch nonTerm -> printNonTerminal name nonTerm
-  RSeqTerm sq -> printSeqTerm tyName name sq
-  ROptional r -> printOptional name r
-  RMany r -> printMany name r
-  RMany1 r -> printMany1 name r
-  RWrap r -> printWrap name r
-
-astHeader
-  :: Text
-  -- ^ Module name
-  -> Maybe (Text, Text)
-  -- ^ Name of module to import the terminal type from, and the name
-  -- of the terminal type itself.  Use 'Nothing' if your terminal type
-  -- is in the Prelude.
-  -> Text
-astHeader name mayImportType = X.unlines $
-  [ "{-# LANGUAGE DeriveDataTypeable #-}"
-  , ""
-  , X.unwords ["module", name, "where"]
-  , ""
-  , "import Data.Sequence (Seq)"
-  , "import Data.Typeable (Typeable)"
-  ] ++ case mayImportType of
-          Nothing -> []
-          Just (mod, tyName) ->
-            [X.unwords ["import", mod, "(" <> tyName <> ")"]]
-
-printAllRules
-  :: Show t
-  => Text
-  -- ^ Module name
-  -> Text
-  -- ^ Terminal type constructor name
-  -> Maybe Text
-  -- ^ Where to import the terminal type from
-  -> Map Int (Rule t)
-  -> Text
-printAllRules modName tyName mayTermMod
-  = X.concat
-  . intersperse "\n"
-  . (astHeader modName impTerminal :)
-  . fmap (printRule tyName)
-  . fmap snd
-  . M.toAscList
-  where
-    impTerminal = case mayTermMod of
-      Nothing -> Nothing
-      Just termMod -> Just (termMod, tyName)
-
--- | Creates code for the AST for all 'Rule's created in the
--- 'Pinchot'.  The 'Rule's are shown in the order in which they were
--- created.
-allPinchotRules
-  :: Show t
-  => Text
-  -- ^ Module name
-  -> Text
-  -- ^ Terminal type constructor name
-  -> Maybe Text
-  -- ^ Where to import the terminal type from
-  -> Pinchot t a
-  -> Either Error Text
-allPinchotRules modName tyName mayTermMod (Pinchot exc) = case eiErr of
-  Left err -> Left err
-  Right _ -> Right $ printAllRules modName tyName mayTermMod (allRules st')
-  where
-    (eiErr, st') = flip runState (Names Set.empty Set.empty 0 M.empty)
-      . runExceptT $ exc
-
-handleError
-  :: Either Error Text
-  -> IO ()
-handleError e = case e of
-  Left e -> throwIO e
-  Right g -> XIO.putStr g
-
--- | Like 'allPinchotRules' but prints the results to standard output.
--- Throws an 'Error' if any errors occurred.
-allPinchotRulesToStdout
-  :: Show t
-  => Text
-  -- ^ Module name
-  -> Text
-  -- ^ Terminal type constructor name
-  -> Maybe Text
-  -- ^ Where to import the terminal type from
-  -> Pinchot t a
-  -> IO ()
-allPinchotRulesToStdout modName tyName mayTermMod p = handleError
-  $ allPinchotRules modName tyName mayTermMod p
-
 -- | Gets all ancestor 'Rule's.  Skips duplicates.
 getAncestors
   :: Rule t
@@ -484,88 +281,27 @@ getAncestors r@(Rule name ei) = do
           ass <- fmap join . mapM branchAncestors $ bs
           return $ r <| as1 <> ass
         RSeqTerm _ -> return (Seq.singleton r)
-        ROptional r -> do
-          cs <- getAncestors r
+        ROptional c -> do
+          cs <- getAncestors c
           return $ r <| cs
-        RMany r -> do
-          cs <- getAncestors r
+        RMany c -> do
+          cs <- getAncestors c
           return $ r <| cs
-        RMany1 r -> do
-          cs <- getAncestors r
+        RMany1 c -> do
+          cs <- getAncestors c
           return $ r <| cs
-        RWrap r -> do
-          cs <- getAncestors r
+        RWrap c -> do
+          cs <- getAncestors c
           return $ r <| cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
--- | Shows only the returned 'Rule' and its ancestors.  Rules are
--- printed in the order in which they are encountered as the tree of
--- 'Rule's is traversed.
-ancestors
-  :: Show t
-  => Text
-  -- ^ Module name
-  -> Text
-  -- ^ Terminal type constructor name
-  -> Maybe Text
-  -- ^ Where to import the terminal type from
-  -> Pinchot t (Rule t)
-  -> Either Error Text
-ancestors modName tyName mayTermMod (Pinchot exc) = case eiErr of
-  Left err -> Left err
-  Right rule ->
-    Right
-    . X.concat
-    . intersperse "\n"
-    . (astHeader modName impTerminal :)
-    . fmap (printRule tyName)
-    . toList
-    . ancies
-    $ rule
-  where
-    (eiErr, _) = flip runState (Names Set.empty Set.empty 0 M.empty)
-      . runExceptT $ exc
-    ancies rule = fst $ runState (getAncestors rule) Set.empty
-    impTerminal = case mayTermMod of
-      Nothing -> Nothing
-      Just termMod -> Just (termMod, tyName)
-
-
--- | Like 'ancestors' but prints results to standard output.  Throws
--- an 'Error' if any errors occurred.
-
-ancestorsToStdout
-  :: Show t
-  => Text
-  -- ^ Module name
-  -> Text
-  -- ^ Terminal type constructor name
-  -> Maybe Text
-  -- ^ Where to import the terminal type from
-  -> Pinchot t (Rule t)
-  -> IO ()
-ancestorsToStdout modName tyName mayTermMod p
-  = handleError $ ancestors modName tyName mayTermMod p
 
 -- | Generates a parser for use with the @Earley@ package.
 earleyParser
-  :: Text
-  -- ^ Module name for the resulting parser
-  -> Text
-  -- ^ Terminal type constructor name.  Often this will be 'Char'.
-  -> Maybe Text
-  -- ^ Where to import the terminal type from.  Use 'Nothing' if your
-  -- terminal type is already in the Prelude.
-  -> Text
-  -- ^ Where to import the AST from
-  -> Pinchot t (Rule t)
-  -> Either Error Text
+  :: Pinchot t (Rule t)
+  -> ExpQ
 earleyParser = undefined
-
---
--- # Template Haskell - experimental
---
 
 thBranch :: Branch t -> ConQ
 thBranch (Branch nm rules) = normalC name fields
@@ -633,14 +369,34 @@ thAllRules typeName
   . fmap snd
   . M.toAscList
 
-makeAst
+
+-- | Creates code for every 'Rule' created in the 'Pinchot'.  The data
+-- types are created in the same order in which they were created in
+-- the 'Pinchot'.
+allRulesToCode
   :: Name
   -- ^ Terminal type constructor name
   -> Pinchot t a
   -> DecsQ
-makeAst typeName pinchot = case ei of
+allRulesToCode typeName pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
   Right _ -> thAllRules typeName (allRules st')
   where
     (ei, st') = runState (runExceptT (runPinchot pinchot))
+      (Names Set.empty Set.empty 0 M.empty)
+
+-- | Creates code only for the 'Rule' returned from the 'Pinchot', and
+-- for its ancestors.
+ruleTreeToCode
+  :: Name
+  -- ^ Terminal type constructor name
+  -> Pinchot t (Rule t)
+  -> DecsQ
+ruleTreeToCode typeName pinchot = case ei of
+  Left err -> fail $ "pinchot: bad grammar: " ++ show err
+  Right rule -> sequence . toList . fmap (thRule typeName)
+    . runCalc . getAncestors $ rule
+  where
+    runCalc stateCalc = fst $ runState stateCalc (Set.empty)
+    (ei, _) = runState (runExceptT (runPinchot pinchot))
       (Names Set.empty Set.empty 0 M.empty)
