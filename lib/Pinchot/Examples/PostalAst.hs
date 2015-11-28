@@ -7,5 +7,5 @@ import Pinchot.Examples.Postal
 
 import Prelude hiding (Word)
 
-makeAst "Char" postal
+makeAst ''Char postal
 

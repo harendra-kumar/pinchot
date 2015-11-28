@@ -574,13 +574,13 @@ thBranch (Branch nm rules) = normalC name fields
     fields = toList . fmap mkField $ rules
 
 
-thRule :: Text -> Rule t -> DecQ
+thRule :: Name -> Rule t -> DecQ
 thRule typeName (Rule nm ruleType) = case ruleType of
 
   RTerminal _ -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
-        [strictType notStrict (conT (mkName (unpack typeName)))]
+        [strictType notStrict (conT typeName)]
 
   RBranch (b1, bs) -> dataD (cxt []) name [] cons derives
     where
@@ -590,7 +590,7 @@ thRule typeName (Rule nm ruleType) = case ruleType of
     where
       cons = [normalC name
         [strictType notStrict (appT (conT (mkName "Seq"))
-                                    (conT (mkName (unpack typeName))))]]
+                                    (conT typeName))]]
 
   ROptional (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
@@ -622,7 +622,7 @@ thRule typeName (Rule nm ruleType) = case ruleType of
     derives = map mkName ["Eq", "Ord", "Show"]
 
 thAllRules
-  :: Text
+  :: Name
   -- ^ Terminal type constructor name
   -> Map Int (Rule t)
   -> DecsQ
@@ -633,7 +633,7 @@ thAllRules typeName
   . M.toAscList
 
 makeAst
-  :: Text
+  :: Name
   -- ^ Terminal type constructor name
   -> Pinchot t a
   -> DecsQ

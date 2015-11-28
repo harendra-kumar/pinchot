@@ -29,6 +29,7 @@ templateHaskell = atleast "template-haskell" [2,10]
 commonOptions :: HasBuildInfo a => [a]
 commonOptions =
   [ ghcOptions ["-W"]
+  , otherExtensions ["TemplateHaskell"]
   , haskell2010
   , hsSourceDirs ["lib"]
   ]
@@ -72,13 +73,5 @@ main = defaultMain $ do
     ,   exposedModules libMods
       : buildDepends libraryDepends
       : commonOptions
-    , [ githubHead "massysett" "penny"
-      , executable "grower" ( mainIs "grower.hs"
-                              : buildDepends libraryDepends
-                              : otherModules ("Postal" : libMods)
-                              : hsSourceDirs ["grower"]
-                              : otherExtensions ["TemplateHaskell"]
-                              : commonOptions
-                            )
-      ]
+    , [ githubHead "massysett" "penny" ]
     )
