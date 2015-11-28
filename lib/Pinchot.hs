@@ -55,8 +55,9 @@ import qualified Data.Set as Set
 import Data.Text (Text, unpack)
 import qualified Data.Text as X
 import Data.Typeable (Typeable)
-
 import Language.Haskell.TH
+  (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
+   cxt, conT, Name, dataD, appT, DecsQ)
 
 data RuleType t
   = RTerminal (Intervals t)
