@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Pinchot.Intervals where
 
 import Control.Monad (join)
@@ -6,6 +7,8 @@ import Data.Monoid ((<>))
 import Data.Ord (comparing)
 import Data.Sequence (Seq, ViewL(EmptyL, (:<)), viewl, (<|))
 import qualified Data.Sequence as Seq
+import Language.Haskell.TH
+import Language.Haskell.TH.Syntax
 
 -- | Groups of terminals.  Create an 'Intervals' using 'include',
 -- 'exclude', 'solo' and 'pariah'.  Combine 'Intervals' using
@@ -218,5 +221,16 @@ splitIntervals (Intervals is es)
   = removeExcludes (standardizeIntervalSeq is) es
 
 -- | 'True' if the given element is a member of the 'Intervals'.
-inIntervals :: (Enum a, Ord a) => a -> Intervals a -> Bool
-inIntervals a = any (inInterval a) . splitIntervals
+inIntervals :: (Enum a, Ord a) => Intervals a -> a -> Bool
+inIntervals ivls a = any (inInterval a) . splitIntervals $ ivls
+
+liftSeq :: Lift a => Seq a -> ExpQ
+liftSeq sq = case viewl sq of
+  EmptyL -> varE 'Seq.empty
+  x :< xs -> uInfixE (lift x) (varE '(<|)) (liftSeq xs)
+
+instance Lift a => Lift (Intervals a) where
+  lift (Intervals inc exc) = ((conE 'Intervals) `appE` sqInc) `appE` sqExc
+    where
+      sqInc = liftSeq inc
+      sqExc = liftSeq exc

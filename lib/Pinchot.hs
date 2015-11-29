@@ -37,6 +37,7 @@ module Pinchot
 
 import Pinchot.Intervals
 
+import Control.Applicative ((<|>), empty, liftA2)
 import Control.Exception (Exception)
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
@@ -55,9 +56,14 @@ import qualified Data.Set as Set
 import Data.Text (Text, unpack)
 import qualified Data.Text as X
 import Data.Typeable (Typeable)
+{-
 import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
    cxt, conT, Name, dataD, appT, DecsQ)
+-}
+import Language.Haskell.TH
+import qualified Language.Haskell.TH.Syntax as Syntax
+import Text.Earley
 
 data RuleType t
   = RTerminal (Intervals t)
@@ -401,3 +407,110 @@ ruleTreeToCode typeName pinchot = case ei of
     runCalc stateCalc = fst $ runState stateCalc (Set.empty)
     (ei, _) = runState (runExceptT (runPinchot pinchot))
       (Names Set.empty Set.empty 0 M.empty)
+
+
+
+ruleToParser
+  :: Syntax.Lift t
+  => Rule t
+  -> Q [Stmt]
+ruleToParser (Rule nm rt) = case rt of
+
+  RTerminal ivls -> do
+    topRule <- makeRule expression
+    return [topRule]
+    where
+      expression = [|fmap|] `appE` constructor `appE`
+        [|satisfy (inIntervals ivls)|]
+
+  RBranch (b1, bs) -> do
+    topRule <- makeRule expression
+    return [topRule]
+    where
+      expression = uInfixE (branchToParser b1)
+        [|(<|>)|] (go bs)
+        where
+          go sq = case viewl sq of
+            EmptyL -> [| empty |]
+            x :< xs -> uInfixE (branchToParser x) [| (<|>) |]
+              (go xs)
+
+  RSeqTerm sq -> do
+    innerName <- newName "seqRule"
+    let nestRule = bindS (varP innerName) ([|rule|] `appE` (go sq))
+          where
+            go sqnce = case viewl sqnce of
+              EmptyL -> [|pure Seq.empty|]
+              x :< xs -> [|liftA2|] `appE` [|(<|)|] `appE` [|symbol x|]
+                `appE` go xs
+    nest <- nestRule
+    topRule <- makeRule (wrapper innerName)
+    return [nest, topRule]
+
+  ROptional (Rule innerNm _) -> fmap (:[]) (makeRule expression)
+    where
+      expression = uInfixE [|pure Nothing|] [|(<|>)|] just
+        where
+          just = [|fmap Just|] `appE` (ruleName innerNm)
+
+  RMany (Rule innerNm _) -> do
+    sqRuleNm <- newName "manyRule"
+    let nestRule = bindS (varP sqRuleNm) ([|rule|] `appE` parseSeq)
+          where
+            parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
+              where
+                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` ruleName innerNm
+                  `appE` varE sqRuleNm
+    nest <- nestRule
+    top <- makeRule $ wrapper sqRuleNm
+    return [nest, top]
+
+  RMany1 (Rule innerNm _) -> do
+    sqRuleNm <- newName "manyRule"
+    let nestRule = bindS (varP sqRuleNm) ([|rule|] `appE` parseSeq)
+          where
+            parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
+              where
+                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` ruleName innerNm
+                  `appE` varE sqRuleNm
+    nest <- nestRule
+    let topExpn = [|liftA2|] `appE` constructor `appE` ruleName innerNm
+          `appE` varE sqRuleNm
+    top <- makeRule topExpn
+    return [nest, top]
+
+  RWrap (Rule innerNm _) -> fmap (:[]) (makeRule expression)
+    where
+      expression = [|fmap|] `appE` constructor `appE` ruleName innerNm
+    
+
+  where
+    makeRule expression = bindS (varP (mkName ("r'" ++ unpack nm)))
+      ([|rule|] `appE` expression)
+    constructor = conE (mkName (unpack nm))
+    ruleName suffix = varE (mkName ("r'" ++ unpack suffix))
+    wrapper wrapRule = [|fmap|] `appE` constructor `appE` varE wrapRule
+
+
+branchToParser
+  :: Syntax.Lift t
+  => Branch t
+  -> Q Exp
+branchToParser (Branch name rules) = case viewl rules of
+  EmptyL -> [|pure|] `appE` constructor
+  (Rule rule1 _) :< xs -> case go Nothing xs of
+    Nothing -> oneField
+    Just restFields -> oneField `appE` restFields
+    where
+      oneField = uInfixE constructor [|(<$>)|] (ruleName rule1)
+      go maybeSoFar sq = case viewl sq of
+        EmptyL -> maybeSoFar
+        (Rule ruleRest _) :< xs -> go (Just soFar') xs
+          where
+            soFar' = case maybeSoFar of
+              Nothing -> ruleName ruleRest
+              Just soFar -> uInfixE soFar [|(<|>)|] (ruleName ruleRest)
+  where
+    constructor = conE (mkName (unpack name))
+    ruleName suffix = varE (mkName ("r'" ++ unpack suffix))
+    

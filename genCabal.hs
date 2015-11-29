@@ -26,6 +26,9 @@ transformers = atleast "transformers" [0,4,2,0]
 templateHaskell :: Package
 templateHaskell = atleast "template-haskell" [2,10]
 
+earley :: Package
+earley = atleast "Earley" [0,10,1,0]
+
 commonOptions :: HasBuildInfo a => [a]
 commonOptions =
   [ ghcOptions ["-W"]
@@ -35,7 +38,8 @@ commonOptions =
   ]
 
 libraryDepends :: [Package]
-libraryDepends = [ base, containers, text, transformers, templateHaskell ]
+libraryDepends = [ base, containers, text, transformers, templateHaskell,
+  earley ]
 
 props :: Properties
 props = blank
