@@ -32,6 +32,7 @@ module Pinchot
   , earleyParser
   , allRulesToCode
   , ruleTreeToCode
+  , ruleParser
   , Error(..)
   ) where
 
@@ -40,7 +41,7 @@ import Pinchot.Intervals
 import Control.Applicative ((<|>), empty, liftA2)
 import Control.Exception (Exception)
 import Control.Monad (join, when)
-import Control.Monad.Fix (MonadFix)
+import Control.Monad.Fix (MonadFix, mfix)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except (ExceptT, throwE, runExceptT)
 import Control.Monad.Trans.State (State, runState, get, put)
@@ -436,15 +437,14 @@ ruleToParser (Rule nm rt) = case rt of
               (go xs)
 
   RSeqTerm sq -> do
-    innerName <- newName "seqRule"
-    let nestRule = bindS (varP innerName) ([|rule|] `appE` (go sq))
+    let nestRule = bindS (varP helper) ([|rule|] `appE` (go sq))
           where
             go sqnce = case viewl sqnce of
               EmptyL -> [|pure Seq.empty|]
               x :< xs -> [|liftA2|] `appE` [|(<|)|] `appE` [|symbol x|]
                 `appE` go xs
     nest <- nestRule
-    topRule <- makeRule (wrapper innerName)
+    topRule <- makeRule (wrapper helper)
     return [nest, topRule]
 
   ROptional (Rule innerNm _) -> fmap (:[]) (makeRule expression)
@@ -454,28 +454,26 @@ ruleToParser (Rule nm rt) = case rt of
           just = [|fmap Just|] `appE` (ruleName innerNm)
 
   RMany (Rule innerNm _) -> do
-    sqRuleNm <- newName "manyRule"
-    let nestRule = bindS (varP sqRuleNm) ([|rule|] `appE` parseSeq)
+    let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
             parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
               where
                 pSeq = [|liftA2|] `appE` [|(<|)|] `appE` ruleName innerNm
-                  `appE` varE sqRuleNm
+                  `appE` varE helper
     nest <- nestRule
-    top <- makeRule $ wrapper sqRuleNm
+    top <- makeRule $ wrapper helper
     return [nest, top]
 
   RMany1 (Rule innerNm _) -> do
-    sqRuleNm <- newName "manyRule"
-    let nestRule = bindS (varP sqRuleNm) ([|rule|] `appE` parseSeq)
+    let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
             parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
               where
                 pSeq = [|liftA2|] `appE` [|(<|)|] `appE` ruleName innerNm
-                  `appE` varE sqRuleNm
+                  `appE` varE helper
     nest <- nestRule
     let topExpn = [|liftA2|] `appE` constructor `appE` ruleName innerNm
-          `appE` varE sqRuleNm
+          `appE` varE helper
     top <- makeRule topExpn
     return [nest, top]
 
@@ -490,27 +488,87 @@ ruleToParser (Rule nm rt) = case rt of
     constructor = conE (mkName (unpack nm))
     ruleName suffix = varE (mkName ("r'" ++ unpack suffix))
     wrapper wrapRule = [|fmap|] `appE` constructor `appE` varE wrapRule
+    helper = mkName ("h'" ++ unpack nm)
 
 
 branchToParser
   :: Syntax.Lift t
   => Branch t
-  -> Q Exp
+  -> ExpQ
 branchToParser (Branch name rules) = case viewl rules of
-  EmptyL -> [|pure|] `appE` constructor
-  (Rule rule1 _) :< xs -> case go Nothing xs of
-    Nothing -> oneField
-    Just restFields -> oneField `appE` restFields
+  EmptyL -> [| pure $constructor |]
+  (Rule rule1 _) :< xs -> foldl f z xs
     where
-      oneField = uInfixE constructor [|(<$>)|] (ruleName rule1)
-      go maybeSoFar sq = case viewl sq of
-        EmptyL -> maybeSoFar
-        (Rule ruleRest _) :< xs -> go (Just soFar') xs
-          where
-            soFar' = case maybeSoFar of
-              Nothing -> ruleName ruleRest
-              Just soFar -> uInfixE soFar [|(<|>)|] (ruleName ruleRest)
+      z = [| $constructor <$> $(ruleName rule1) |]
+      f soFar (Rule rule2 _) = [| $soFar <*> $(ruleName rule2) |]
   where
     constructor = conE (mkName (unpack name))
     ruleName suffix = varE (mkName ("r'" ++ unpack suffix))
     
+-- | Creates a lazy pattern for all the given names.
+lazyPattern
+  :: [Name]
+  -> Q Pat
+lazyPattern ns = [p| ~(_, $(go ns)) |]
+  where
+    go es = case es of
+      [] -> [p| () |]
+      x:xs -> [p| ($(varP x), $(go xs)) |]
+{-
+    go e1 es = case es of
+      [] -> [p| ( _ , ()) |]
+      x:xs -> [p| (_, $(go x xs)) |]
+-}
+
+-- | Creates a tuple for all the given names.
+bigTuple
+  :: Name
+  -> [Name]
+  -> Q Exp
+bigTuple n ns = go n ns
+  where
+    go e1 es = case es of
+      [] -> tupE [varE e1, [e|()|]]
+      x:xs -> tupE [varE e1, go x xs]
+
+-- | Given a root Rule, returns all the Names required when creating a parser.
+allRequiredNames
+  :: Rule t
+  -> Set Name
+allRequiredNames = go Set.empty
+  where
+    go set (Rule n ty)
+      = more (Set.insert (mkName ("r'" ++ unpack n)) set)
+      where
+        more set = case ty of
+          RTerminal _ -> set
+          RBranch (Branch _ s1, bs) -> foldl goBranch (foldl go set s1) bs
+            where
+              goBranch set (Branch _ sqRule) = foldl go set sqRule
+          RSeqTerm _ -> helper set
+          ROptional r -> go set r
+          RMany r -> helper (go set r)
+          RMany1 r -> helper (go set r)
+          RWrap r -> go set r
+          where
+            helper = Set.insert (mkName ("h'" ++ unpack n))
+
+ruleParser
+  :: Syntax.Lift t
+  => Pinchot t (Rule t)
+  -> Q Exp
+ruleParser pinc = case ei of
+  Left err -> fail $ "pinchot: bad grammar: " ++ show err
+  Right rule@(Rule top _) -> do
+    let lamb = lamE [lazyPattern otherNames] expression
+        otherNames = toList . allRequiredNames $ rule
+        expression = do
+          stmts <- ruleToParser rule
+          result <- bigTuple (mkName ("r'" ++ unpack top)) otherNames
+          rtn <- [|return|]
+          let returner = rtn `AppE` result
+          return $ DoE (stmts ++ [NoBindS returner])
+    [| fmap fst (mfix $lamb) |]
+  where
+    (ei, _) = runState (runExceptT (runPinchot pinc))
+      (Names Set.empty Set.empty 0 M.empty)
