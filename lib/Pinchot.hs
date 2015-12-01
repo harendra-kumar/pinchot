@@ -465,26 +465,26 @@ ruleToParser (Rule nm rt) = case rt of
   RMany1 (Rule innerNm _) -> do
     let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
-            parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
+            parseSeq = [| pure Seq.empty <|> $pSeq |]
               where
-                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` (varE (ruleName innerNm))
-                  `appE` varE (helperName innerNm)
+                pSeq = [| (<|) <$> $(varE (ruleName innerNm))
+                               <*> $(varE (helperName innerNm)) |]
     nest <- nestRule
-    let topExpn = [|liftA2|] `appE` constructor `appE` (varE (ruleName innerNm))
-          `appE` varE helper
+    let topExpn = [| $constructor <$> $(varE (ruleName innerNm))
+                                  <*> $(varE helper) |]
     top <- makeRule topExpn
     return [nest, top]
 
   RWrap (Rule innerNm _) -> fmap (:[]) (makeRule expression)
     where
-      expression = [|fmap|] `appE` constructor `appE` (varE (ruleName innerNm))
+      expression = [|fmap $constructor $(varE (ruleName innerNm)) |]
     
 
   where
-    makeRule expression = bindS (varP (ruleName nm))
-      ([|rule|] `appE` expression)
+    makeRule expression = varP (ruleName nm) `bindS`
+      [|rule $expression|]
     constructor = conE (mkName (unpack nm))
-    wrapper wrapRule = [|fmap|] `appE` constructor `appE` varE wrapRule
+    wrapper wrapRule = [|fmap $constructor $(varE wrapRule) |]
     helper = helperName nm
 
 
@@ -516,11 +516,6 @@ lazyPattern ns = [p| ~(_, $(go ns)) |]
     go es = case es of
       [] -> [p| () |]
       x:xs -> [p| ($(varP x), $(go xs)) |]
-{-
-    go e1 es = case es of
-      [] -> [p| ( _ , ()) |]
-      x:xs -> [p| (_, $(go x xs)) |]
--}
 
 -- | Creates a tuple for all the given names.
 bigTuple
