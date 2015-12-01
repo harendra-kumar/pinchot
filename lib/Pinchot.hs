@@ -57,12 +57,10 @@ import qualified Data.Set as Set
 import Data.Text (Text, unpack)
 import qualified Data.Text as X
 import Data.Typeable (Typeable)
-{-
 import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
-   cxt, conT, Name, dataD, appT, DecsQ)
--}
-import Language.Haskell.TH
+   cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
+   varE, varP, conE, Pat, tupE, Exp(AppE, DoE), lamE)
 import qualified Language.Haskell.TH.Syntax as Syntax
 import Text.Earley
 
@@ -451,14 +449,14 @@ ruleToParser (Rule nm rt) = case rt of
     where
       expression = uInfixE [|pure Nothing|] [|(<|>)|] just
         where
-          just = [|fmap Just|] `appE` (ruleName innerNm)
+          just = [|fmap Just|] `appE` (varE (ruleName innerNm))
 
   RMany (Rule innerNm _) -> do
     let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
             parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
               where
-                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` ruleName innerNm
+                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` (varE (ruleName innerNm))
                   `appE` varE helper
     nest <- nestRule
     top <- makeRule $ wrapper helper
@@ -469,27 +467,32 @@ ruleToParser (Rule nm rt) = case rt of
           where
             parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
               where
-                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` ruleName innerNm
-                  `appE` varE helper
+                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` (varE (ruleName innerNm))
+                  `appE` varE (helperName innerNm)
     nest <- nestRule
-    let topExpn = [|liftA2|] `appE` constructor `appE` ruleName innerNm
+    let topExpn = [|liftA2|] `appE` constructor `appE` (varE (ruleName innerNm))
           `appE` varE helper
     top <- makeRule topExpn
     return [nest, top]
 
   RWrap (Rule innerNm _) -> fmap (:[]) (makeRule expression)
     where
-      expression = [|fmap|] `appE` constructor `appE` ruleName innerNm
+      expression = [|fmap|] `appE` constructor `appE` (varE (ruleName innerNm))
     
 
   where
-    makeRule expression = bindS (varP (mkName ("r'" ++ unpack nm)))
+    makeRule expression = bindS (varP (ruleName nm))
       ([|rule|] `appE` expression)
     constructor = conE (mkName (unpack nm))
-    ruleName suffix = varE (mkName ("r'" ++ unpack suffix))
     wrapper wrapRule = [|fmap|] `appE` constructor `appE` varE wrapRule
-    helper = mkName ("h'" ++ unpack nm)
+    helper = helperName nm
 
+
+ruleName :: Text -> Name
+ruleName suffix = mkName ("_r'" ++ unpack suffix)
+
+helperName :: Text -> Name
+helperName suffix = mkName ("_h'" ++ unpack suffix)
 
 branchToParser
   :: Syntax.Lift t
@@ -499,11 +502,10 @@ branchToParser (Branch name rules) = case viewl rules of
   EmptyL -> [| pure $constructor |]
   (Rule rule1 _) :< xs -> foldl f z xs
     where
-      z = [| $constructor <$> $(ruleName rule1) |]
-      f soFar (Rule rule2 _) = [| $soFar <*> $(ruleName rule2) |]
+      z = [| $constructor <$> $(varE (ruleName rule1)) |]
+      f soFar (Rule rule2 _) = [| $soFar <*> $(varE (ruleName rule2)) |]
   where
     constructor = conE (mkName (unpack name))
-    ruleName suffix = varE (mkName ("r'" ++ unpack suffix))
     
 -- | Creates a lazy pattern for all the given names.
 lazyPattern
@@ -538,7 +540,7 @@ allRequiredNames
 allRequiredNames = go Set.empty
   where
     go set (Rule n ty)
-      = more (Set.insert (mkName ("r'" ++ unpack n)) set)
+      = more (Set.insert (ruleName n) set)
       where
         more set = case ty of
           RTerminal _ -> set
@@ -564,7 +566,7 @@ ruleParser pinc = case ei of
         otherNames = toList . allRequiredNames $ rule
         expression = do
           stmts <- ruleToParser rule
-          result <- bigTuple (mkName ("r'" ++ unpack top)) otherNames
+          result <- bigTuple (ruleName top) otherNames
           rtn <- [|return|]
           let returner = rtn `AppE` result
           return $ DoE (stmts ++ [NoBindS returner])
