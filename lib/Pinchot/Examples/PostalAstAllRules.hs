@@ -6,8 +6,8 @@ module Pinchot.Examples.PostalAstAllRules where
 import Pinchot
 import Pinchot.Examples.Postal
 import Text.Earley
+import Data.Text (Text)
 
 allRulesToCode ''Char postal
 
-myParser :: Grammar r (Prod r e t Address)
 myParser = $(ruleParser postal)

@@ -230,7 +230,7 @@ liftSeq sq = case viewl sq of
   x :< xs -> uInfixE (lift x) (varE '(<|)) (liftSeq xs)
 
 instance Lift a => Lift (Intervals a) where
-  lift (Intervals inc exc) = ((conE 'Intervals) `appE` sqInc) `appE` sqExc
+  lift (Intervals inc exc) = [| Intervals $sqInc $sqExc |]
     where
       sqInc = liftSeq inc
       sqExc = liftSeq exc

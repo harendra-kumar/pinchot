@@ -62,7 +62,8 @@ import Language.Haskell.TH
    cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
    varE, varP, conE, Pat, tupE, Exp(AppE, DoE), lamE)
 import qualified Language.Haskell.TH.Syntax as Syntax
-import Text.Earley
+import Text.Earley (satisfy, rule, symbol)
+import qualified Text.Earley ((<?>))
 
 data RuleType t
   = RTerminal (Intervals t)
@@ -74,8 +75,19 @@ data RuleType t
   | RWrap (Rule t)
   deriving (Eq, Ord, Show)
 
+-- Rule n d t, where
+--
+-- n is the name of the rule.  This is used as the name of the
+-- corresponding data type.
+--
+-- d is the description of the rule.  This is optional and is used for
+-- the parser's error messages.  If there is no description, the name
+-- is used for error messages.
+--
+-- t is the type of rule (terminal, branch, etc.)
+
 -- | A single production rule.  It may be a terminal or a non-terminal.
-data Rule t = Rule Text (RuleType t)
+data Rule t = Rule Text (Maybe Text) (RuleType t)
   deriving (Eq, Ord, Show)
 
 data Branch t = Branch Text (Seq (Rule t))
@@ -138,15 +150,17 @@ addDataConName name = Pinchot $ do
 newRule
   :: RuleName
   -> RuleType t
-  -> Pinchot t ()
-newRule name ei = Pinchot $ do
+  -> Pinchot t (Rule t)
+newRule name ty = Pinchot $ do
   runPinchot (addRuleName name)
   st <- lift get
-  let newSt = st { nextIndex = succ (nextIndex st)
-                 , allRules = M.insert (nextIndex st) (Rule name ei)
+  let r = Rule name Nothing ty
+      newSt = st { nextIndex = succ (nextIndex st)
+                 , allRules = M.insert (nextIndex st) r
                             (allRules st)
                  }
   lift (put newSt)
+  return r
 
 -- | Type synonym for the name of a production rule.  
 -- This will be the name of the type constructor for the corresponding
@@ -175,9 +189,7 @@ terminal
 
   -> Pinchot t (Rule t)
 
-terminal name ivls = do
-  newRule name (RTerminal ivls)
-  return $ Rule name (RTerminal ivls)
+terminal name ivls = newRule name (RTerminal ivls)
 
 splitNonTerminal
   :: Text
@@ -198,9 +210,7 @@ terminalSeq
 
   -> Pinchot t (Rule t)
 
-terminalSeq name sq = do
-  newRule name (RSeqTerm sq)
-  return $ Rule name (RSeqTerm sq)
+terminalSeq name sq = newRule name (RSeqTerm sq)
 
 -- | Creates a new non-terminal production rule.
 nonTerminal
@@ -221,7 +231,6 @@ nonTerminal name sq = do
   (b1, bs) <- splitNonTerminal name sq
   let branches = RBranch (uncurry Branch b1, fmap (uncurry Branch) bs)
   newRule name branches
-  return $ Rule name branches
 
 -- | Creates a rule for the production of a sequence of other rules.
 list
@@ -232,9 +241,7 @@ list
   -- 'Rule'; that is, this 'Rule' may appear zero or more times.
 
   -> Pinchot t (Rule t)
-list name r = do
-  newRule name (RMany r)
-  return $ Rule name (RMany r)
+list name r = newRule name (RMany r)
 
 -- | Creates a rule for a production that appears at least once.
 list1
@@ -242,9 +249,7 @@ list1
   -> Rule t
   -- ^ The resulting 'Rule' produces this 'Rule' at least once.
   -> Pinchot t (Rule t)
-list1 name r = do
-  newRule name (RMany1 r)
-  return $ Rule name (RMany1 r)
+list1 name r = newRule name (RMany1 r)
 
 -- | Creates a rule for a production that optionally produces another
 -- rule.
@@ -255,9 +260,7 @@ option
   -- this 'Rule' may appear once or not at all.
 
   -> Pinchot t (Rule t)
-option name r = do
-  newRule name (ROptional r)
-  return $ Rule name (ROptional r)
+option name r = newRule name (ROptional r)
 
 -- | Creates a newtype wrapper.
 
@@ -266,15 +269,13 @@ wrap
   -> Rule t
   -- ^ The resulting 'Rule' simply wraps this 'Rule'.
   -> Pinchot t (Rule t)
-wrap name r = do
-  newRule name (RWrap r)
-  return $ Rule name (RWrap r)
+wrap name r = newRule name (RWrap r)
 
 -- | Gets all ancestor 'Rule's.  Skips duplicates.
 getAncestors
   :: Rule t
   -> State (Set Text) (Seq (Rule t))
-getAncestors r@(Rule name ei) = do
+getAncestors r@(Rule name _ ei) = do
   set <- get
   if Set.member name set
     then return Seq.empty
@@ -313,12 +314,12 @@ thBranch :: Branch t -> ConQ
 thBranch (Branch nm rules) = normalC name fields
   where
     name = mkName (unpack nm)
-    mkField (Rule n _) = strictType notStrict (conT (mkName (unpack n)))
+    mkField (Rule n _ _) = strictType notStrict (conT (mkName (unpack n)))
     fields = toList . fmap mkField $ rules
 
 
 thRule :: Name -> Rule t -> DecQ
-thRule typeName (Rule nm ruleType) = case ruleType of
+thRule typeName (Rule nm _ ruleType) = case ruleType of
 
   RTerminal _ -> newtypeD (cxt []) name [] newtypeCon derives
     where
@@ -335,26 +336,26 @@ thRule typeName (Rule nm ruleType) = case ruleType of
         [strictType notStrict (appT [t| Seq |]
                                     (conT typeName))]]
 
-  ROptional (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
+  ROptional (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
         [strictType notStrict (appT [t| Maybe |]
                                     (conT (mkName (unpack inner))))]
 
-  RMany (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
+  RMany (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
         [strictType notStrict (appT [t| Seq |]
                                     (conT (mkName (unpack inner))))]
 
-  RMany1 (Rule inner _) -> dataD (cxt []) name [] [cons] derives
+  RMany1 (Rule inner _ _) -> dataD (cxt []) name [] [cons] derives
     where
       cons = normalC name
         [ strictType notStrict (conT (mkName (unpack inner)))
         , strictType notStrict (appT [t| Seq |]
                                      (conT (mkName (unpack inner))))]
 
-  RWrap (Rule inner _) -> newtypeD (cxt []) name [] newtypeCon derives
+  RWrap (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
         [ strictType notStrict (conT (mkName (unpack inner))) ]
@@ -413,14 +414,13 @@ ruleToParser
   :: Syntax.Lift t
   => Rule t
   -> Q [Stmt]
-ruleToParser (Rule nm rt) = case rt of
+ruleToParser (Rule nm mayDescription rt) = case rt of
 
   RTerminal ivls -> do
     topRule <- makeRule expression
     return [topRule]
     where
-      expression = [|fmap|] `appE` constructor `appE`
-        [|satisfy (inIntervals ivls)|]
+      expression = [| fmap $constructor (satisfy (inIntervals ivls)) |]
 
   RBranch (b1, bs) -> do
     topRule <- makeRule expression
@@ -435,23 +435,22 @@ ruleToParser (Rule nm rt) = case rt of
               (go xs)
 
   RSeqTerm sq -> do
-    let nestRule = bindS (varP helper) ([|rule|] `appE` (go sq))
+    let nestRule = bindS (varP helper) [|rule $(go sq)|]
           where
             go sqnce = case viewl sqnce of
               EmptyL -> [|pure Seq.empty|]
-              x :< xs -> [|liftA2|] `appE` [|(<|)|] `appE` [|symbol x|]
-                `appE` go xs
+              x :< xs -> [|liftA2 (<|) (symbol x) $(go xs)|]
     nest <- nestRule
     topRule <- makeRule (wrapper helper)
     return [nest, topRule]
 
-  ROptional (Rule innerNm _) -> fmap (:[]) (makeRule expression)
+  ROptional (Rule innerNm _ _) -> fmap (:[]) (makeRule expression)
     where
-      expression = uInfixE [|pure Nothing|] [|(<|>)|] just
+      expression = [| fmap $constructor (pure Nothing <|> $(just)) |]
         where
-          just = [|fmap Just|] `appE` (varE (ruleName innerNm))
+          just = [| fmap Just $(varE (ruleName innerNm)) |]
 
-  RMany (Rule innerNm _) -> do
+  RMany (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
             parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
@@ -462,37 +461,39 @@ ruleToParser (Rule nm rt) = case rt of
     top <- makeRule $ wrapper helper
     return [nest, top]
 
-  RMany1 (Rule innerNm _) -> do
-    let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
+  RMany1 (Rule innerNm _ _) -> do
+    let nestRule = bindS (varP helper) [|rule $(parseSeq)|]
           where
             parseSeq = [| pure Seq.empty <|> $pSeq |]
               where
                 pSeq = [| (<|) <$> $(varE (ruleName innerNm))
-                               <*> $(varE (helperName innerNm)) |]
+                               <*> $(varE helper) |]
     nest <- nestRule
     let topExpn = [| $constructor <$> $(varE (ruleName innerNm))
                                   <*> $(varE helper) |]
     top <- makeRule topExpn
     return [nest, top]
 
-  RWrap (Rule innerNm _) -> fmap (:[]) (makeRule expression)
+  RWrap (Rule innerNm _ _) -> fmap (:[]) (makeRule expression)
     where
       expression = [|fmap $constructor $(varE (ruleName innerNm)) |]
     
 
   where
     makeRule expression = varP (ruleName nm) `bindS`
-      [|rule $expression|]
+      [|rule ($expression Text.Earley.<?> $(textToExp desc))|]
+    desc = maybe nm id mayDescription
+    textToExp txt = [| X.pack $(Syntax.lift (unpack txt)) |]
     constructor = conE (mkName (unpack nm))
     wrapper wrapRule = [|fmap $constructor $(varE wrapRule) |]
     helper = helperName nm
 
 
 ruleName :: Text -> Name
-ruleName suffix = mkName ("_r'" ++ unpack suffix)
+ruleName suffix = mkName ("r'" ++ unpack suffix)
 
 helperName :: Text -> Name
-helperName suffix = mkName ("_h'" ++ unpack suffix)
+helperName suffix = mkName ("h'" ++ unpack suffix)
 
 branchToParser
   :: Syntax.Lift t
@@ -500,10 +501,10 @@ branchToParser
   -> ExpQ
 branchToParser (Branch name rules) = case viewl rules of
   EmptyL -> [| pure $constructor |]
-  (Rule rule1 _) :< xs -> foldl f z xs
+  (Rule rule1 _ _) :< xs -> foldl f z xs
     where
       z = [| $constructor <$> $(varE (ruleName rule1)) |]
-      f soFar (Rule rule2 _) = [| $soFar <*> $(varE (ruleName rule2)) |]
+      f soFar (Rule rule2 _ _) = [| $soFar <*> $(varE (ruleName rule2)) |]
   where
     constructor = conE (mkName (unpack name))
     
@@ -534,7 +535,7 @@ allRequiredNames
   -> Set Name
 allRequiredNames = go Set.empty
   where
-    go set (Rule n ty)
+    go set (Rule n _ ty)
       = more (Set.insert (ruleName n) set)
       where
         more set = case ty of
@@ -556,11 +557,12 @@ ruleParser
   -> Q Exp
 ruleParser pinc = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right rule@(Rule top _) -> do
+  Right rule@(Rule top _ _) -> do
     let lamb = lamE [lazyPattern otherNames] expression
         otherNames = toList . allRequiredNames $ rule
         expression = do
-          stmts <- ruleToParser rule
+          let allRules = fst $ runState (getAncestors rule) Set.empty
+          stmts <- fmap concat . mapM ruleToParser . toList $ allRules
           result <- bigTuple (ruleName top) otherNames
           rtn <- [|return|]
           let returner = rtn `AppE` result
