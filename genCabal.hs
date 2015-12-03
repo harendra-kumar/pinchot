@@ -17,9 +17,6 @@ base = closedOpen "base" [4,8,0,0] [5]
 containers :: Package
 containers = atleast "containers" [0,5,6,2]
 
-text :: Package
-text = atleast "text" [1,2,1,3]
-
 transformers :: Package
 transformers = atleast "transformers" [0,4,2,0]
 
@@ -38,7 +35,7 @@ commonOptions =
   ]
 
 libraryDepends :: [Package]
-libraryDepends = [ base, containers, text, transformers, templateHaskell,
+libraryDepends = [ base, containers, transformers, templateHaskell,
   earley ]
 
 props :: Properties

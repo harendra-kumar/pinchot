@@ -1,5 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Pinchot
@@ -33,7 +32,6 @@ module Pinchot
   , earleyParser
   , allRulesToCode
   , ruleTreeToCode
-  , ruleParser
   , Error(..)
   ) where
 
@@ -55,8 +53,6 @@ import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|))
 import qualified Data.Sequence as Seq
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text, unpack)
-import qualified Data.Text as X
 import Data.Typeable (Typeable)
 import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
@@ -88,32 +84,32 @@ data RuleType t
 -- t is the type of rule (terminal, branch, etc.)
 
 -- | A single production rule.  It may be a terminal or a non-terminal.
-data Rule t = Rule Text (Maybe Text) (RuleType t)
+data Rule t = Rule String (Maybe String) (RuleType t)
   deriving (Eq, Ord, Show)
 
 -- | Name a 'Rule' for use in error messages.  If you do not name a
 -- rule using this combinator, the rule's type name will be used in
 -- error messages.
-(<?>) :: Rule t -> Text -> Rule t
+(<?>) :: Rule t -> String -> Rule t
 (Rule n _ t) <?> newName = Rule n (Just newName) t
 
-data Branch t = Branch Text (Seq (Rule t))
+data Branch t = Branch String (Seq (Rule t))
   deriving (Eq, Ord, Show)
 
 data Names t = Names
   { tyConNames :: Set RuleName
-  , dataConNames :: Set Text
+  , dataConNames :: Set String
   , nextIndex :: Int
   , allRules :: Map Int (Rule t)
   } deriving (Eq, Ord, Show)
 
 -- | Errors that may arise when constructing an AST.
 data Error
-  = InvalidName Text
+  = InvalidName String
   -- ^ A name was invalid.  The field is the invalid name.  The name
   -- might be invalid because it was already used, or because it does
   -- not begin with a capital letter.
-  | EmptyNonTerminal Text
+  | EmptyNonTerminal String
   -- ^ A non-terminal must have at least one summand.  The field is
   -- the name of the empty non-terminal.
   deriving (Show, Typeable)
@@ -131,9 +127,9 @@ addRuleName
   -> Pinchot t ()
 addRuleName name = Pinchot $ do
   old@(Names tyNames _ _ _) <- lift get
-  case X.uncons name of
-    Nothing -> throw
-    Just (x, _) -> do
+  case name of
+    [] -> throw
+    x:_ -> do
       when (not (isUpper x)) throw
       when (Set.member name tyNames) throw
       lift $ put (old { tyConNames = Set.insert name tyNames })
@@ -141,13 +137,13 @@ addRuleName name = Pinchot $ do
     throw = throwE $ InvalidName name
 
 addDataConName
-  :: Text
+  :: String
   -> Pinchot t ()
 addDataConName name = Pinchot $ do
   old@(Names _ dataConNames _ _) <- lift get
-  case X.uncons name of
-    Nothing -> throw
-    Just (x, _) -> do
+  case name of
+    [] -> throw
+    x:_ -> do
       when (not (isUpper x)) throw
       when (Set.member name dataConNames) throw
       lift $ put (old { dataConNames = Set.insert name dataConNames })
@@ -178,13 +174,13 @@ newRule name ty = Pinchot $ do
 -- 'wrap', the 'RuleName' will also be used for the name of the single
 -- data construtor.  If you are creating a 'nonTerminal', you will
 -- specify the name of each data constructor with 'AlternativeName'.
-type RuleName = Text
+type RuleName = String
 
 -- | Type synonym the the name of an alternative in a 'nonTerminal'.
 -- This name must not conflict with any other data constructor, either
 -- one specified as an 'AlternativeName' or one that was created using
 -- 'terminal', 'option', 'list', or 'list1'.
-type AlternativeName = Text
+type AlternativeName = String
 
 -- | Creates a terminal production rule.
 terminal
@@ -199,9 +195,9 @@ terminal
 terminal name ivls = newRule name (RTerminal ivls)
 
 splitNonTerminal
-  :: Text
-  -> Seq (Text, Seq (Rule t))
-  -> Pinchot t ((Text, Seq (Rule t)), Seq (Text, Seq (Rule t)))
+  :: String
+  -> Seq (String, Seq (Rule t))
+  -> Pinchot t ((String, Seq (Rule t)), Seq (String, Seq (Rule t)))
 splitNonTerminal n sq = Pinchot $ case viewl sq of
   EmptyL -> throwE $ EmptyNonTerminal n
   x :< xs -> return (x, xs)
@@ -224,7 +220,7 @@ nonTerminal
 
   :: RuleName
 
-  -> Seq (Text, Seq (Rule t))
+  -> Seq (AlternativeName, Seq (Rule t))
   -- ^ Alternatives.  There must be at least one alternative;
   -- otherwise, an error will result.  In each pair @(a, b)@, @a@ will
   -- be the data constructor, so this must be a valid Haskell data
@@ -281,7 +277,7 @@ wrap name r = newRule name (RWrap r)
 -- | Gets all ancestor 'Rule's.  Skips duplicates.
 getAncestors
   :: Rule t
-  -> State (Set Text) (Seq (Rule t))
+  -> State (Set String) (Seq (Rule t))
 getAncestors r@(Rule name _ ei) = do
   set <- get
   if Set.member name set
@@ -340,17 +336,11 @@ rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Set.empty)
         addHelper = Set.insert (helperName nm)
   
 
--- | Generates a parser for use with the @Earley@ package.
-earleyParser
-  :: Pinchot t (Rule t)
-  -> ExpQ
-earleyParser = undefined
-
 thBranch :: Branch t -> ConQ
 thBranch (Branch nm rules) = normalC name fields
   where
-    name = mkName (unpack nm)
-    mkField (Rule n _ _) = strictType notStrict (conT (mkName (unpack n)))
+    name = mkName nm
+    mkField (Rule n _ _) = strictType notStrict (conT (mkName n))
     fields = toList . fmap mkField $ rules
 
 
@@ -369,36 +359,36 @@ thRule typeName (Rule nm _ ruleType) = case ruleType of
   RSeqTerm _ -> dataD (cxt []) name [] cons derives
     where
       cons = [normalC name
-        [strictType notStrict (appT [t| Seq |]
+        [strictType notStrict (appT [t| [] |]
                                     (conT typeName))]]
 
   ROptional (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
         [strictType notStrict (appT [t| Maybe |]
-                                    (conT (mkName (unpack inner))))]
+                                    (conT (mkName inner)))]
 
   RMany (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
-        [strictType notStrict (appT [t| Seq |]
-                                    (conT (mkName (unpack inner))))]
+        [strictType notStrict (appT [t| [] |]
+                                    (conT (mkName inner)))]
 
   RMany1 (Rule inner _ _) -> dataD (cxt []) name [] [cons] derives
     where
       cons = normalC name
-        [ strictType notStrict (conT (mkName (unpack inner)))
-        , strictType notStrict (appT [t| Seq |]
-                                     (conT (mkName (unpack inner))))]
+        [ strictType notStrict (conT (mkName inner))
+        , strictType notStrict (appT [t| [] |]
+                                     (conT (mkName inner)))]
 
   RWrap (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
-        [ strictType notStrict (conT (mkName (unpack inner))) ]
+        [ strictType notStrict (conT (mkName inner)) ]
 
 
   where
-    name = mkName (unpack nm)
+    name = mkName nm
     derives = map mkName ["Eq", "Ord", "Show"]
 
 thAllRules
@@ -471,8 +461,8 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
     let nestRule = bindS (varP helper) [|rule $(go sq)|]
           where
             go sqnce = case viewl sqnce of
-              EmptyL -> [|pure Seq.empty|]
-              x :< xs -> [|liftA2 (<|) (symbol x) $(go xs)|]
+              EmptyL -> [|pure []|]
+              x :< xs -> [|liftA2 (:) (symbol x) $(go xs)|]
     nest <- nestRule
     topRule <- makeRule (wrapper helper)
     return [nest, topRule]
@@ -486,10 +476,9 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
   RMany (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
-            parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
+            parseSeq = uInfixE [|pure []|] [|(<|>)|] pSeq
               where
-                pSeq = [|liftA2|] `appE` [|(<|)|] `appE` (varE (ruleName innerNm))
-                  `appE` varE helper
+                pSeq = [|liftA2 (:) $(varE (ruleName innerNm)) $(varE helper) |]
     nest <- nestRule
     top <- makeRule $ wrapper helper
     return [nest, top]
@@ -497,10 +486,10 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
   RMany1 (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) [|rule $(parseSeq)|]
           where
-            parseSeq = [| pure Seq.empty <|> $pSeq |]
+            parseSeq = [| pure [] <|> $pSeq |]
               where
-                pSeq = [| (<|) <$> $(varE (ruleName innerNm))
-                               <*> $(varE helper) |]
+                pSeq = [| (:) <$> $(varE (ruleName innerNm))
+                              <*> $(varE helper) |]
     nest <- nestRule
     let topExpn = [| $constructor <$> $(varE (ruleName innerNm))
                                   <*> $(varE helper) |]
@@ -516,17 +505,17 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
     makeRule expression = varP (ruleName nm) `bindS`
       [|rule ($expression Text.Earley.<?> $(textToExp desc))|]
     desc = maybe nm id mayDescription
-    textToExp txt = [| X.pack $(Syntax.lift (unpack txt)) |]
-    constructor = conE (mkName (unpack nm))
+    textToExp txt = [| $(Syntax.lift txt) |]
+    constructor = conE (mkName nm)
     wrapper wrapRule = [|fmap $constructor $(varE wrapRule) |]
     helper = helperName nm
 
 
-ruleName :: Text -> Name
-ruleName suffix = mkName ("r'" ++ unpack suffix)
+ruleName :: String -> Name
+ruleName suffix = mkName ("r'" ++ suffix)
 
-helperName :: Text -> Name
-helperName suffix = mkName ("h'" ++ unpack suffix)
+helperName :: String -> Name
+helperName suffix = mkName ("h'" ++ suffix)
 
 branchToParser
   :: Syntax.Lift t
@@ -539,7 +528,7 @@ branchToParser (Branch name rules) = case viewl rules of
       z = [| $constructor <$> $(varE (ruleName rule1)) |]
       f soFar (Rule rule2 _ _) = [| $soFar <*> $(varE (ruleName rule2)) |]
   where
-    constructor = conE (mkName (unpack name))
+    constructor = conE (mkName name)
     
 -- | Creates a lazy pattern for all the given names.  Adds an empty
 -- pattern onto the front.
@@ -562,11 +551,11 @@ bigTuple top = finish . foldr f [| () |]
     f n rest = [| ( $(varE n), $rest) |]
     finish tup = [| ($(varE top), $tup) |]
 
-ruleParser
+earleyParser
   :: Syntax.Lift t
   => Pinchot t (Rule t)
   -> Q Exp
-ruleParser pinc = case ei of
+earleyParser pinc = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
   Right rule@(Rule top _ _) -> do
     let neededRules = ruleAndAncestors rule
