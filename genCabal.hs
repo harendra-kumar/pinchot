@@ -77,5 +77,14 @@ main = defaultMain $ do
     ,   exposedModules libMods
       : buildDepends libraryDepends
       : commonOptions
-    , [ githubHead "massysett" "penny" ]
+    , [ githubHead "massysett" "penny"
+      , testSuite "postal-parser" $
+        [ mainIs "postal-parser.hs"
+        , exitcodeStdio
+        , otherModules libMods
+        , hsSourceDirs ["tests"]
+        , buildDepends libraryDepends
+        ] ++ commonOptions
+
+      ]
     )
