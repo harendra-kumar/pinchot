@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# OPTIONS_GHC -fwarn-missing-signatures #-}
 module Pinchot.Examples.PostalAstAllRules where
 
 import Pinchot
 import Pinchot.Examples.Postal
 import Text.Earley
-import Data.Text (Text)
+import Data.Text
 
 allRulesToCode ''Char postal
 
+myParser :: Grammar r (Prod r Text Char Address)
 myParser = $(ruleParser postal)

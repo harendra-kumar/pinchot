@@ -24,6 +24,7 @@ module Pinchot
   , list1
   , option
   , wrap
+  , (<?>)
 
   -- * Sequence type constructor
   , Seq
@@ -50,7 +51,7 @@ import Data.Foldable (toList)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid ((<>))
-import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|), (|>))
+import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|))
 import qualified Data.Sequence as Seq
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -89,6 +90,12 @@ data RuleType t
 -- | A single production rule.  It may be a terminal or a non-terminal.
 data Rule t = Rule Text (Maybe Text) (RuleType t)
   deriving (Eq, Ord, Show)
+
+-- | Name a 'Rule' for use in error messages.  If you do not name a
+-- rule using this combinator, the rule's type name will be used in
+-- error messages.
+(<?>) :: Rule t -> Text -> Rule t
+(Rule n _ t) <?> newName = Rule n (Just newName) t
 
 data Branch t = Branch Text (Seq (Rule t))
   deriving (Eq, Ord, Show)
@@ -311,8 +318,8 @@ ruleAndAncestors r = fst $ runState (getAncestors r) Set.empty
 
 -- | Given a sequence of 'Rule', determine which rules are on a
 -- right-hand side before they are defined.
-rulesDemandedBeforeDefined :: Foldable f => f (Rule t) -> Seq Name
-rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Seq.empty)
+rulesDemandedBeforeDefined :: Foldable f => f (Rule t) -> Set Name
+rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Set.empty)
   where
     f (lhsDefined, results) (Rule nm _ ty)
       = (Set.insert nm lhsDefined, results')
@@ -329,8 +336,8 @@ rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Seq.empty)
           RWrap r -> checkRule r results
         checkRule (Rule name _ _) rslts
           | Set.member name lhsDefined = rslts
-          | otherwise = rslts |> ruleName name
-        addHelper sq = sq |> helperName nm
+          | otherwise = Set.insert (ruleName name) rslts
+        addHelper = Set.insert (helperName nm)
   
 
 -- | Generates a parser for use with the @Earley@ package.
@@ -554,28 +561,6 @@ bigTuple top = finish . foldr f [| () |]
   where
     f n rest = [| ( $(varE n), $rest) |]
     finish tup = [| ($(varE top), $tup) |]
-
--- | Given a root Rule, returns all the Names required when creating a parser.
-allRequiredNames
-  :: Rule t
-  -> Set Name
-allRequiredNames = go Set.empty
-  where
-    go set (Rule n _ ty)
-      = more (Set.insert (ruleName n) set)
-      where
-        more set = case ty of
-          RTerminal _ -> set
-          RBranch (Branch _ s1, bs) -> foldl goBranch (foldl go set s1) bs
-            where
-              goBranch set (Branch _ sqRule) = foldl go set sqRule
-          RSeqTerm _ -> helper set
-          ROptional r -> go set r
-          RMany r -> helper (go set r)
-          RMany1 r -> helper (go set r)
-          RWrap r -> go set r
-          where
-            helper = Set.insert (mkName ("h'" ++ unpack n))
 
 ruleParser
   :: Syntax.Lift t
