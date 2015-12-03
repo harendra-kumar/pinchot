@@ -38,7 +38,7 @@ module Pinchot
 
 import Pinchot.Intervals
 
-import Control.Applicative ((<|>), empty, liftA2)
+import Control.Applicative ((<|>), liftA2)
 import Control.Exception (Exception)
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix, mfix)
@@ -50,7 +50,7 @@ import Data.Foldable (toList)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid ((<>))
-import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|))
+import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|), (|>))
 import qualified Data.Sequence as Seq
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -303,6 +303,35 @@ getAncestors r@(Rule name _ ei) = do
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
+-- | Returns both this 'Rule' and any 'Rule's that are ancestors.
+ruleAndAncestors
+  :: Rule t
+  -> Seq (Rule t)
+ruleAndAncestors r = fst $ runState (getAncestors r) Set.empty
+
+-- | Given a sequence of 'Rule', determine which rules are on a
+-- right-hand side before they are defined.
+rulesDemandedBeforeDefined :: Foldable f => f (Rule t) -> Seq Name
+rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Seq.empty)
+  where
+    f (lhsDefined, results) (Rule nm _ ty)
+      = (Set.insert nm lhsDefined, results')
+      where
+        results' = case ty of
+          RTerminal _ -> results
+          RBranch (b1, bs) -> foldr checkBranch (checkBranch b1 results) bs
+            where
+              checkBranch (Branch _ rls) rslts = foldr checkRule rslts rls
+          RSeqTerm _ -> results
+          ROptional r -> checkRule r results
+          RMany r -> addHelper $ checkRule r results
+          RMany1 r -> addHelper $ checkRule r results
+          RWrap r -> checkRule r results
+        checkRule (Rule name _ _) rslts
+          | Set.member name lhsDefined = rslts
+          | otherwise = rslts |> ruleName name
+        addHelper sq = sq |> helperName nm
+  
 
 -- | Generates a parser for use with the @Earley@ package.
 earleyParser
@@ -426,13 +455,10 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
     topRule <- makeRule expression
     return [topRule]
     where
-      expression = uInfixE (branchToParser b1)
-        [|(<|>)|] (go bs)
+      expression = foldl addBranch (branchToParser b1) bs
         where
-          go sq = case viewl sq of
-            EmptyL -> [| empty |]
-            x :< xs -> uInfixE (branchToParser x) [| (<|>) |]
-              (go xs)
+          addBranch tree branch =
+            [| $tree <|> $(branchToParser branch) |]
 
   RSeqTerm sq -> do
     let nestRule = bindS (varP helper) [|rule $(go sq)|]
@@ -508,15 +534,16 @@ branchToParser (Branch name rules) = case viewl rules of
   where
     constructor = conE (mkName (unpack name))
     
--- | Creates a lazy pattern for all the given names.
+-- | Creates a lazy pattern for all the given names.  Adds an empty
+-- pattern onto the front.
 lazyPattern
-  :: [Name]
+  :: Foldable c
+  => c Name
   -> Q Pat
-lazyPattern ns = [p| ~(_, $(go ns)) |]
+lazyPattern = finish . foldr gen [p| () |]
   where
-    go es = case es of
-      [] -> [p| () |]
-      x:xs -> [p| ($(varP x), $(go xs)) |]
+    gen name rest = [p| ($(varP name), $rest) |]
+    finish pat = [p| ~(_, $pat) |]
 
 -- | Creates a tuple for all the given names.
 bigTuple
@@ -561,8 +588,8 @@ ruleParser pinc = case ei of
     let lamb = lamE [lazyPattern otherNames] expression
         otherNames = toList . allRequiredNames $ rule
         expression = do
-          let allRules = fst $ runState (getAncestors rule) Set.empty
-          stmts <- fmap concat . mapM ruleToParser . toList $ allRules
+          stmts <- fmap concat . mapM ruleToParser . toList . ruleAndAncestors
+            $ rule
           result <- bigTuple (ruleName top) otherNames
           rtn <- [|return|]
           let returner = rtn `AppE` result
