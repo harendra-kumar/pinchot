@@ -60,7 +60,7 @@ import Data.Typeable (Typeable)
 import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
    cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
-   varE, varP, conE, Pat, tupE, Exp(AppE, DoE), lamE)
+   varE, varP, conE, Pat, Exp(AppE, DoE), lamE)
 import qualified Language.Haskell.TH.Syntax as Syntax
 import Text.Earley (satisfy, rule, symbol)
 import qualified Text.Earley ((<?>))
@@ -545,16 +545,15 @@ lazyPattern = finish . foldr gen [p| () |]
     gen name rest = [p| ($(varP name), $rest) |]
     finish pat = [p| ~(_, $pat) |]
 
--- | Creates a tuple for all the given names.
 bigTuple
-  :: Name
-  -> [Name]
-  -> Q Exp
-bigTuple n ns = go n ns
+  :: Foldable c
+  => Name
+  -> c Name
+  -> ExpQ
+bigTuple top = finish . foldr f [| () |]
   where
-    go e1 es = case es of
-      [] -> tupE [varE e1, [e|()|]]
-      x:xs -> tupE [varE e1, go x xs]
+    f n rest = [| ( $(varE n), $rest) |]
+    finish tup = [| ($(varE top), $tup) |]
 
 -- | Given a root Rule, returns all the Names required when creating a parser.
 allRequiredNames
@@ -585,11 +584,11 @@ ruleParser
 ruleParser pinc = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
   Right rule@(Rule top _ _) -> do
-    let lamb = lamE [lazyPattern otherNames] expression
-        otherNames = toList . allRequiredNames $ rule
+    let neededRules = ruleAndAncestors rule
+        otherNames = rulesDemandedBeforeDefined neededRules
+        lamb = lamE [lazyPattern otherNames] expression
         expression = do
-          stmts <- fmap concat . mapM ruleToParser . toList . ruleAndAncestors
-            $ rule
+          stmts <- fmap concat . mapM ruleToParser . toList $ neededRules
           result <- bigTuple (ruleName top) otherNames
           rtn <- [|return|]
           let returner = rtn `AppE` result
