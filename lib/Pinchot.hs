@@ -25,9 +25,6 @@ module Pinchot
   , wrap
   , (<?>)
 
-  -- * Sequence type constructor
-  , Seq
-
   -- * Transforming an AST to code
   , earleyParser
   , allRulesToCode
@@ -49,8 +46,6 @@ import Data.Foldable (toList)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid ((<>))
-import Data.Sequence (Seq, viewl, ViewL(EmptyL, (:<)), (<|))
-import qualified Data.Sequence as Seq
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Typeable (Typeable)
@@ -64,8 +59,8 @@ import qualified Text.Earley ((<?>))
 
 data RuleType t
   = RTerminal (Intervals t)
-  | RBranch (Branch t, Seq (Branch t))
-  | RSeqTerm (Seq t)
+  | RBranch (Branch t, [(Branch t)])
+  | RSeqTerm [t] 
   | ROptional (Rule t)
   | RMany (Rule t)
   | RMany1 (Rule t)
@@ -93,7 +88,7 @@ data Rule t = Rule String (Maybe String) (RuleType t)
 (<?>) :: Rule t -> String -> Rule t
 (Rule n _ t) <?> newName = Rule n (Just newName) t
 
-data Branch t = Branch String (Seq (Rule t))
+data Branch t = Branch String [(Rule t)]
   deriving (Eq, Ord, Show)
 
 data Names t = Names
@@ -196,11 +191,11 @@ terminal name ivls = newRule name (RTerminal ivls)
 
 splitNonTerminal
   :: String
-  -> Seq (String, Seq (Rule t))
-  -> Pinchot t ((String, Seq (Rule t)), Seq (String, Seq (Rule t)))
-splitNonTerminal n sq = Pinchot $ case viewl sq of
-  EmptyL -> throwE $ EmptyNonTerminal n
-  x :< xs -> return (x, xs)
+  -> [(String, [(Rule t)])]
+  -> Pinchot t ((String, [(Rule t)]), [(String, [Rule t])])
+splitNonTerminal n sq = Pinchot $ case sq of
+  [] -> throwE $ EmptyNonTerminal n
+  x : xs -> return (x, xs)
 
 -- | Creates a production for a sequence of terminals.  Useful for
 -- parsing specific words.
@@ -208,7 +203,7 @@ terminalSeq
 
   :: RuleName
 
-  -> Seq t
+  -> [t]
   -- ^ Sequence of terminal symbols to recognize
 
   -> Pinchot t (Rule t)
@@ -220,7 +215,7 @@ nonTerminal
 
   :: RuleName
 
-  -> Seq (AlternativeName, Seq (Rule t))
+  -> [(AlternativeName, [Rule t])]
   -- ^ Alternatives.  There must be at least one alternative;
   -- otherwise, an error will result.  In each pair @(a, b)@, @a@ will
   -- be the data constructor, so this must be a valid Haskell data
@@ -277,39 +272,39 @@ wrap name r = newRule name (RWrap r)
 -- | Gets all ancestor 'Rule's.  Skips duplicates.
 getAncestors
   :: Rule t
-  -> State (Set String) (Seq (Rule t))
+  -> State (Set String) [Rule t]
 getAncestors r@(Rule name _ ei) = do
   set <- get
   if Set.member name set
-    then return Seq.empty
+    then return []
     else do
       put (Set.insert name set)
       case ei of
-        RTerminal _ -> return (Seq.singleton r)
+        RTerminal _ -> return [r]
         RBranch (b1, bs) -> do
           as1 <- branchAncestors b1
           ass <- fmap join . mapM branchAncestors $ bs
-          return $ r <| as1 <> ass
-        RSeqTerm _ -> return (Seq.singleton r)
+          return $ r : as1 <> ass
+        RSeqTerm _ -> return [r]
         ROptional c -> do
           cs <- getAncestors c
-          return $ r <| cs
+          return $ r : cs
         RMany c -> do
           cs <- getAncestors c
-          return $ r <| cs
+          return $ r : cs
         RMany1 c -> do
           cs <- getAncestors c
-          return $ r <| cs
+          return $ r : cs
         RWrap c -> do
           cs <- getAncestors c
-          return $ r <| cs
+          return $ r : cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
 -- | Returns both this 'Rule' and any 'Rule's that are ancestors.
 ruleAndAncestors
   :: Rule t
-  -> Seq (Rule t)
+  -> [Rule t]
 ruleAndAncestors r = fst $ runState (getAncestors r) Set.empty
 
 -- | Given a sequence of 'Rule', determine which rules are on a
@@ -344,8 +339,14 @@ thBranch (Branch nm rules) = normalC name fields
     fields = toList . fmap mkField $ rules
 
 
-thRule :: Name -> Rule t -> DecQ
-thRule typeName (Rule nm _ ruleType) = case ruleType of
+thRule
+  :: Name
+  -- ^ Name of terminal type
+  -> [Name]
+  -- ^ What to derive
+  -> Rule t
+  -> DecQ
+thRule typeName derives (Rule nm _ ruleType) = case ruleType of
 
   RTerminal _ -> newtypeD (cxt []) name [] newtypeCon derives
     where
@@ -389,16 +390,17 @@ thRule typeName (Rule nm _ ruleType) = case ruleType of
 
   where
     name = mkName nm
-    derives = map mkName ["Eq", "Ord", "Show"]
 
 thAllRules
   :: Name
   -- ^ Terminal type constructor name
+  -> [Name]
+  -- ^ What to derive
   -> Map Int (Rule t)
   -> DecsQ
-thAllRules typeName
+thAllRules typeName derives
   = sequence
-  . fmap (thRule typeName)
+  . fmap (thRule typeName derives)
   . fmap snd
   . M.toAscList
 
@@ -409,11 +411,13 @@ thAllRules typeName
 allRulesToCode
   :: Name
   -- ^ Terminal type constructor name
+  -> [Name]
+  -- ^ What to derive
   -> Pinchot t a
   -> DecsQ
-allRulesToCode typeName pinchot = case ei of
+allRulesToCode typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right _ -> thAllRules typeName (allRules st')
+  Right _ -> thAllRules typeName derives (allRules st')
   where
     (ei, st') = runState (runExceptT (runPinchot pinchot))
       (Names Set.empty Set.empty 0 M.empty)
@@ -423,11 +427,13 @@ allRulesToCode typeName pinchot = case ei of
 ruleTreeToCode
   :: Name
   -- ^ Terminal type constructor name
+  -> [Name]
+  -- ^ What to derive
   -> Pinchot t (Rule t)
   -> DecsQ
-ruleTreeToCode typeName pinchot = case ei of
+ruleTreeToCode typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right rule -> sequence . toList . fmap (thRule typeName)
+  Right rule -> sequence . toList . fmap (thRule typeName derives)
     . runCalc . getAncestors $ rule
   where
     runCalc stateCalc = fst $ runState stateCalc (Set.empty)
@@ -460,9 +466,9 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
   RSeqTerm sq -> do
     let nestRule = bindS (varP helper) [|rule $(go sq)|]
           where
-            go sqnce = case viewl sqnce of
-              EmptyL -> [|pure []|]
-              x :< xs -> [|liftA2 (:) (symbol x) $(go xs)|]
+            go sqnce = case sqnce of
+              [] -> [|pure []|]
+              x : xs -> [|liftA2 (:) (symbol x) $(go xs)|]
     nest <- nestRule
     topRule <- makeRule (wrapper helper)
     return [nest, topRule]
@@ -521,9 +527,9 @@ branchToParser
   :: Syntax.Lift t
   => Branch t
   -> ExpQ
-branchToParser (Branch name rules) = case viewl rules of
-  EmptyL -> [| pure $constructor |]
-  (Rule rule1 _ _) :< xs -> foldl f z xs
+branchToParser (Branch name rules) = case rules of
+  [] -> [| pure $constructor |]
+  (Rule rule1 _ _) : xs -> foldl f z xs
     where
       z = [| $constructor <$> $(varE (ruleName rule1)) |]
       f soFar (Rule rule2 _ _) = [| $soFar <*> $(varE (ruleName rule2)) |]
@@ -571,3 +577,4 @@ earleyParser pinc = case ei of
   where
     (ei, _) = runState (runExceptT (runPinchot pinc))
       (Names Set.empty Set.empty 0 M.empty)
+

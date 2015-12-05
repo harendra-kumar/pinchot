@@ -5,7 +5,7 @@ import Pinchot
 import Pinchot.Examples.Postal
 import Text.Earley
 
-allRulesToCode ''Char postal
+allRulesToCode ''Char [''Eq, ''Ord, ''Show] postal
 
 myParser :: Grammar r (Prod r String Char Address)
 myParser = $(earleyParser postal)

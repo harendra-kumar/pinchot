@@ -4,7 +4,6 @@ module Pinchot.Examples.Postal where
 import Pinchot
 
 import Data.Monoid ((<>))
-import Data.Sequence (fromList)
 
 -- | A grammar for simple U.S. postal addresses.  This example would never
 -- hold up to real-world usage but it gives you a flavor of how
@@ -21,10 +20,10 @@ postal = mdo
   direction <- nonTerminal "Direction"
     [ ("DNorth", [north]), ("DSouth", [south]), ("DEast", [east])
     , ("DWest", [west])]
-  street <- terminalSeq "Street" (fromList "St")
-  avenue <- terminalSeq "Avenue" (fromList "Ave")
-  way <- terminalSeq "Way" (fromList "Way")
-  boulevard <- terminalSeq "Boulevard" (fromList "Blvd")
+  street <- terminalSeq "Street" "St"
+  avenue <- terminalSeq "Avenue" "Ave"
+  way <- terminalSeq "Way" "Way"
+  boulevard <- terminalSeq "Boulevard" "Blvd"
   suffix <- nonTerminal "Suffix"
     [ ("SStreet", [street]), ("SAvenue", [avenue]), ("SWay", [way])
     , ("SBoulevard", [boulevard])]
