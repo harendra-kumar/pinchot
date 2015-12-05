@@ -56,7 +56,7 @@ props = blank
   , homepage = "http://www.github.com/massysett/pinchot"
   , bugReports = "http://www.github.com/massysett/pinchot/issues"
   , synopsis = "Build parsers and ASTs for context-free grammars"
-  , extraSourceFiles = ["README.md"]
+  , extraSourceFiles = ["README"]
   , description =
     [ "Pinchot provides a simple language that you use to write a Haskell"
     , "program that describes a context-free grammar.  When run, this program"

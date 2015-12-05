@@ -13,6 +13,27 @@ strings in the context-free language.
 
 For examples, please consult "Pinchot.Examples".
 
+You should also look at the BNF Converter.
+
+<http://bnfc.digitalgrammars.com>
+
+Primary differences between BNFC and this library:
+
+* the BNF Converter works as a standalone binary that parses
+text BNF files.  With Pinchot you specify your grammar in Haskell.
+
+* the BNF Converter currently generates many more outputs, such
+as LaTeX.  It also generates code for many languages.  Pinchot
+only works in Haskell.
+
+* the BNF Converter generates input for parser generators like
+Happy and Bison.  Pinchot currently only generates input
+for the Haskell Earley library.
+
+* Pinchot integrates seamlessly into Haskell using Template Haskell.
+
+* the BNF Converter is GPL.  Pinchot is BSD3.
+
 Pinchot grows and harvests syntax trees, so it is named after
 Gifford Pinchot, first chief of the United States Forest Service.
 
