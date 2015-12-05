@@ -10,9 +10,10 @@ import Data.Monoid ((<>))
 -- Pinchot works.
 postal :: Pinchot Char (Rule Char)
 postal = mdo
-  digit <- terminal "Digit" (include '0' '9')
+  digit <- terminal "Digit" (include '0' '9') <?> "digit from 0 to 9"
   digits <- list1 "Digits" digit
   letter <- terminal "Letter" (include 'a' 'z' <> include 'A' 'Z')
+    <?> "letter from A to Z"
   north <- terminal "North" (solo 'N')
   south <- terminal "South" (solo 'S')
   east <- terminal "East" (solo 'E')

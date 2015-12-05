@@ -39,6 +39,7 @@ module Pinchot
   , list1
   , option
   , wrap
+  , label
   , (<?>)
 
   -- * Transforming an AST to code
@@ -100,8 +101,14 @@ data Rule t = Rule String (Maybe String) (RuleType t)
 -- | Name a 'Rule' for use in error messages.  If you do not name a
 -- rule using this combinator, the rule's type name will be used in
 -- error messages.
-(<?>) :: Rule t -> String -> Rule t
-(Rule n _ t) <?> newName = Rule n (Just newName) t
+label :: String -> Rule t -> Rule t
+label s (Rule n _ t) = Rule n (Just s) t
+
+-- | Infix form of 'label' for use in a 'Pinchot'; handy for use in
+-- @do@ or @mdo@ notation.
+(<?>) :: Pinchot t (Rule t) -> String -> Pinchot t (Rule t)
+p <?> s = fmap (label s) p
+infixr 0 <?>
 
 data Branch t = Branch String [(Rule t)]
   deriving (Eq, Ord, Show)
@@ -137,7 +144,7 @@ instance Exception Error
 -- the GHC @RecursiveDo@ extension.  Put
 --
 -- @
--- {-# LANGUAGE RecursiveDo #-}
+-- {-\# LANGUAGE RecursiveDo \#-}
 -- @
 --
 -- at the top of your module, then use @mdo@ instead of @do@.  Because
