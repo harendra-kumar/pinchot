@@ -43,7 +43,7 @@ module Pinchot
   , (<?>)
 
   -- * Transforming an AST to code
-  , earleyParser
+  , earleyGrammar
   , allRulesToCode
   , ruleTreeToCode
   ) where
@@ -173,13 +173,13 @@ addDataConName
   :: String
   -> Pinchot t ()
 addDataConName name = Pinchot $ do
-  old@(Names _ dataConNames _ _) <- lift get
+  old@(Names _ dcNames _ _) <- lift get
   case name of
     [] -> throw
     x:_ -> do
       when (not (isUpper x)) throw
-      when (Set.member name dataConNames) throw
-      lift $ put (old { dataConNames = Set.insert name dataConNames })
+      when (Set.member name dcNames) throw
+      lift $ put (old { dataConNames = Set.insert name dcNames })
   where
     throw = throwE $ InvalidName name
 
@@ -263,7 +263,7 @@ nonTerminal
   -> Pinchot t (Rule t)
 
 nonTerminal name sq = do
-  mapM addDataConName . fmap fst $ sq
+  mapM_ addDataConName . fmap fst $ sq
   (b1, bs) <- splitNonTerminal name sq
   let branches = RBranch (uncurry Branch b1, fmap (uncurry Branch) bs)
   newRule name branches
@@ -488,8 +488,8 @@ ruleTreeToCode
   -> DecsQ
 ruleTreeToCode typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right rule -> sequence . toList . fmap (thRule typeName derives)
-    . runCalc . getAncestors $ rule
+  Right r -> sequence . toList . fmap (thRule typeName derives)
+    . runCalc . getAncestors $ r
   where
     runCalc stateCalc = fst $ runState stateCalc (Set.empty)
     (ei, _) = runState (runExceptT (runPinchot pinchot))
@@ -588,10 +588,10 @@ constructorName pfx nm = conE (mkName name)
       | otherwise = pfx ++ "."
 
 ruleName :: String -> Name
-ruleName suffix = mkName ("r'" ++ suffix)
+ruleName suffix = mkName ("_r'" ++ suffix)
 
 helperName :: String -> Name
-helperName suffix = mkName ("h'" ++ suffix)
+helperName suffix = mkName ("_h'" ++ suffix)
 
 branchToParser
   :: Syntax.Lift t
@@ -629,20 +629,12 @@ bigTuple top = finish . foldr f [| () |]
     f n rest = [| ( $(varE n), $rest) |]
     finish tup = [| ($(varE top), $tup) |]
 
--- | Creates an Earley parser for a given 'Rule'.  For examples of how
+-- | Creates an Earley grammar for a given 'Rule'.  For examples of how
 -- to use this, see the source code for
 -- "Pinchot.Examples.PostalAstRuleTree" and for
 -- "Pinchot.Examples.PostalAstAllRules".
---
--- Currently Template Haskell does not support @mdo@ notation:
---
--- <https://ghc.haskell.org/trac/ghc/ticket/1262>
---
--- so to work around this, the code that is spliced in deliberately uses
--- name shadowing.  Therefore, if you compile with @-Wall@, you will
--- get a large number of warnings.  As a workaround, you can place
 
-earleyParser
+earleyGrammar
   :: Syntax.Lift t
 
   => String
@@ -672,10 +664,10 @@ earleyParser
   -- ^ Creates an Earley parser for the 'Rule' that the 'Pinchot'
   -- returns.
   -> Q Exp
-earleyParser prefix pinc = case ei of
+earleyGrammar prefix pinc = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right rule@(Rule top _ _) -> do
-    let neededRules = ruleAndAncestors rule
+  Right r@(Rule top _ _) -> do
+    let neededRules = ruleAndAncestors r
         otherNames = rulesDemandedBeforeDefined neededRules
         lamb = lamE [lazyPattern otherNames] expression
         expression = do

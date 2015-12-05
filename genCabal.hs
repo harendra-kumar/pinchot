@@ -31,7 +31,7 @@ prettyShow = atleast "pretty-show" [1,6,9]
 
 commonOptions :: HasBuildInfo a => [a]
 commonOptions =
-  [ ghcOptions ["-W"]
+  [ ghcOptions ["-Wall"]
   , otherExtensions ["TemplateHaskell"]
   , haskell2010
   , hsSourceDirs ["lib"]

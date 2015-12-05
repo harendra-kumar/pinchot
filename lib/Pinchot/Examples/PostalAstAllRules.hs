@@ -19,5 +19,7 @@ import Text.Earley (Grammar, Prod)
 -- was defined in the 'Pinchot'.
 allRulesToCode ''Char [''Eq, ''Ord, ''Show] postal
 
-myParser :: Grammar r (Prod r String Char Address)
-myParser = $(earleyParser "" postal)
+-- | Earley grammar created using Template Haskell.
+
+postalGrammar :: Grammar r (Prod r String Char Address)
+postalGrammar = $(earleyGrammar "" postal)

@@ -11,4 +11,4 @@ import Pinchot.Examples.Postal
 
 
 main :: IO ()
-main = runQ [| $(earleyParser "" postal) |] >>= putStrLn . pprint
+main = runQ [| $(earleyGrammar "" postal) |] >>= putStrLn . pprint

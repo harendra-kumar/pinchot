@@ -12,7 +12,16 @@
 -- 'allRulesToCode' and 'earleyParser', while
 -- "Pinchot.Examples.PostalAstRuleTree" shows you how to use
 -- 'ruleTreeToCode' and 'earleyParser'.
+--
+-- Two executables are included in the @pinchot@ package.  To get
+-- them, compile @pinchot@ with the @executables@ Cabal flag.  The
+-- @print-postal-parser@ executable will pretty print the Haskell
+-- source that results from applying 'earleyParser' to the 'postal'
+-- grammar.  The @postal-parser@ executable takes as its first and
+-- sole argument a string.  It parses the string using the 'postal'
+-- grammar and pretty prints the resultin parses to standard output.
 
 module Pinchot.Examples where
 
 import Pinchot
+import Pinchot.Examples.Postal

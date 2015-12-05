@@ -16,4 +16,4 @@ import Text.Earley (Grammar, Prod)
 -- | Earley parser created using Template Haskell.
 
 myParser :: Grammar r (Prod r String Char Ast.Address)
-myParser = $(earleyParser "Ast" Postal.postal)
+myParser = $(earleyGrammar "Ast" Postal.postal)

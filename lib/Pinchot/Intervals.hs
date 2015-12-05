@@ -1,7 +1,9 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Intervals describe terminal symbols.
+-- | Intervals describe terminal symbols.  Ordinarily you will not
+-- need to use this module, as "Pinchot" re-exports the things you
+-- usually need.
 module Pinchot.Intervals where
 
 import Control.Monad (join)

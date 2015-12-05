@@ -20,7 +20,7 @@ import Text.Earley (Grammar, Prod)
 
 ruleTreeToCode ''Char [''Eq, ''Ord, ''Show] postal
 
--- | Earley parser created using Template Haskell.
+-- | Earley grammar created using Template Haskell.
 
-myParser :: Grammar r (Prod r String Char Address)
-myParser = $(earleyParser "" postal)
+postalGrammar :: Grammar r (Prod r String Char Address)
+postalGrammar = $(earleyGrammar "" postal)

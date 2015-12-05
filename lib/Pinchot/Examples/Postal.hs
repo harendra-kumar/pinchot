@@ -8,6 +8,8 @@ import Data.Monoid ((<>))
 -- | A grammar for simple U.S. postal addresses.  This example would never
 -- hold up to real-world usage but it gives you a flavor of how
 -- Pinchot works.
+--
+-- The grammar is ambiguous.
 postal :: Pinchot Char (Rule Char)
 postal = mdo
   digit <- terminal "Digit" (include '0' '9') <?> "digit from 0 to 9"

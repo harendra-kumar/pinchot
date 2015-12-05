@@ -1,5 +1,4 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# OPTIONS_GHC -Wall #-}
 
 -- | Creates a Template Haskell parser.  Parses strings in the postal
 -- language and pretty-prints the result.
@@ -10,14 +9,14 @@ import Pinchot.Examples.Postal
 import System.Environment (getArgs)
 import Text.Show.Pretty (ppShow)
 
-import Text.Earley (Prod, Grammar, parser, allParses)
+import Text.Earley (Prod, Grammar, parser, fullParses)
 
 ruleTreeToCode ''Char [''Show] postal
 
-postalParser :: Grammar r (Prod r String Char Address)
-postalParser = $(earleyParser "" postal)
+postalGrammar :: Grammar r (Prod r String Char Address)
+postalGrammar = $(earleyGrammar "" postal)
 
 main :: IO ()
 main = do
   a1:[] <- getArgs
-  putStrLn . ppShow $ allParses (parser postalParser) a1
+  putStrLn . ppShow $ fullParses (parser postalGrammar) a1
