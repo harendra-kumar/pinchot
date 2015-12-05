@@ -26,6 +26,9 @@ templateHaskell = atleast "template-haskell" [2,10]
 earley :: Package
 earley = atleast "Earley" [0,10,1,0]
 
+prettyShow :: Package
+prettyShow = atleast "pretty-show" [1,6,9]
+
 commonOptions :: HasBuildInfo a => [a]
 commonOptions =
   [ ghcOptions ["-W"]
@@ -97,7 +100,7 @@ main = defaultMain $ do
         , condBlock (flag buildExe)
             (buildable True, ( [ otherModules libMods
                                , hsSourceDirs ["exe"]
-                               , buildDepends libraryDepends
+                               , buildDepends (prettyShow : libraryDepends)
                                ] ++ commonOptions
                              )
             )

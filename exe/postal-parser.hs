@@ -7,9 +7,10 @@ module Main where
 
 import Pinchot
 import Pinchot.Examples.Postal
+import System.Environment (getArgs)
 import Text.Show.Pretty (ppShow)
 
-import Text.Earley (Prod, Grammar)
+import Text.Earley (Prod, Grammar, parser, allParses)
 
 ruleTreeToCode ''Char [''Show] postal
 

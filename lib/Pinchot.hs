@@ -633,6 +633,14 @@ bigTuple top = finish . foldr f [| () |]
 -- to use this, see the source code for
 -- "Pinchot.Examples.PostalAstRuleTree" and for
 -- "Pinchot.Examples.PostalAstAllRules".
+--
+-- Currently Template Haskell does not support @mdo@ notation:
+--
+-- <https://ghc.haskell.org/trac/ghc/ticket/1262>
+--
+-- so to work around this, the code that is spliced in deliberately uses
+-- name shadowing.  Therefore, if you compile with @-Wall@, you will
+-- get a large number of warnings.  As a workaround, you can place
 
 earleyParser
   :: Syntax.Lift t
