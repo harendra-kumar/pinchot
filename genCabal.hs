@@ -58,13 +58,13 @@ props = blank
   , synopsis = "Build parsers and ASTs for context-free grammars"
   , extraSourceFiles = ["README.md"]
   , description =
-    [ "Pinchot builds parsers and ASTs for context-free grammars."
+    [ "Pinchot provides a simple language that you use to write a Haskell"
+    , "program that describes a context-free grammar.  When run, this program"
+    , "creates a value representing the grammar.  Using this value, you can"
+    , "automatically generate data types corresponding to the grammar,"
+    , "as well as an Earley parser to parse strings in that grammar."
     , ""
-    , "For more information, please see the README.md file, which"
-    , "is available in the source tarball or is visible at the bottom"
-    , "of the Pinchot homepage:"
-    , ""
-    , "<http://www.github.com/massysett/pinchot>"
+    , "For more documentation, see the Haddocks for the main Pinchot module."
     ]
   , category = "Development"
   }
@@ -83,8 +83,8 @@ main = defaultMain $ do
       : buildDepends libraryDepends
       : commonOptions
     , [ githubHead "massysett" "penny"
-      , executable "print-postal-parser" $
-        [ mainIs "print-postal-parser.hs"
+      , executable "print-postal-grammar" $
+        [ mainIs "print-postal-grammar.hs"
         , condBlock (flag buildExe)
             (buildable True, ( [ otherModules libMods
                                , hsSourceDirs ["exe"]

@@ -15,8 +15,8 @@
 --
 -- Two executables are included in the @pinchot@ package.  To get
 -- them, compile @pinchot@ with the @executables@ Cabal flag.  The
--- @print-postal-parser@ executable will pretty print the Haskell
--- source that results from applying 'earleyParser' to the 'postal'
+-- @print-postal-grammar@ executable will pretty print the Haskell
+-- source that results from applying 'earleyGrammar' to the 'postal'
 -- grammar.  The @postal-parser@ executable takes as its first and
 -- sole argument a string.  It parses the string using the 'postal'
 -- grammar and pretty prints the resultin parses to standard output.
