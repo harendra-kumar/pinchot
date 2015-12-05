@@ -1,8 +1,26 @@
 {-# LANGUAGE TemplateHaskell #-}
+
+-- | Provides an example of the use of 'ruleTreeToCode'.  You will
+-- want to look at the source code, as it has a Template Haskell
+-- splice that produces all of the data types that you see in the
+-- Haddocks.
 module Pinchot.Examples.PostalAstRuleTree where
 
 import Pinchot
 import Pinchot.Examples.Postal
 
+-- Earley is imported only for the type signature for 'myParser'.  The
+-- Template Haskell does not need the import.
+import Text.Earley (Grammar, Prod)
+
+-- This Template Haskell splice will produce a list of declarations,
+-- with one declaration for each production rule in the grammar.
+-- Unlike 'allRulesToCode', this splice will contain only the
+-- 'Address' rule and its ancestors.
+
 ruleTreeToCode ''Char [''Eq, ''Ord, ''Show] postal
 
+-- | Earley parser created using Template Haskell.
+
+myParser :: Grammar r (Prod r String Char Address)
+myParser = $(earleyParser "" postal)

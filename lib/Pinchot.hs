@@ -1,6 +1,22 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE TemplateHaskell #-}
+{- |
+
+Pinchot provides a simple language that you use to write a Haskell
+program that describes a context-free grammar.  When run, this program
+creates a value that stores your context-free grammar.  You can then
+use Template Haskell to take this value and generate a series of data
+types that correspond to your context-free grammar.  You can also use
+Template Haskell to create an Earley parser that will parse all
+strings in the context-free language.
+
+For examples, please consult "Pinchot.Examples".
+
+Pinchot grows and harvests syntax trees, so it is named after
+Gifford Pinchot, first chief of the United States Forest Service.
+
+-}
 module Pinchot
   ( -- * Intervals
     Intervals
@@ -29,7 +45,6 @@ module Pinchot
   , earleyParser
   , allRulesToCode
   , ruleTreeToCode
-  , Error(..)
   ) where
 
 import Pinchot.Intervals
@@ -113,6 +128,22 @@ instance Exception Error
 
 -- | Constructs new 'Rule's.  @t@ is the type of the token; often this
 -- will be 'Char'.
+--
+-- 'Pinchot' is a 'Monad' and an 'Applicative' so you can combine
+-- computations using the usual methods of those classes.  Also,
+-- 'Pinchot' is a 'MonadFix'.  This allows you to construct a 'Rule'
+-- that depends on itself, and to construct sets of 'Rule's that have
+-- mutually recursive dependencies.  'MonadFix' also allows you to use
+-- the GHC @RecursiveDo@ extension.  Put
+--
+-- @
+-- {-# LANGUAGE RecursiveDo #-}
+-- @
+--
+-- at the top of your module, then use @mdo@ instead of @do@.  Because
+-- an @mdo@ block is recursive, you can use a binding before it is
+-- defined, just as you can in a set of @let@ bindings.
+
 newtype Pinchot t a
   = Pinchot { runPinchot :: (ExceptT Error (State (Names t)) a) }
   deriving (Functor, Applicative, Monad, MonadFix)
@@ -407,13 +438,24 @@ thAllRules typeName derives
 
 -- | Creates code for every 'Rule' created in the 'Pinchot'.  The data
 -- types are created in the same order in which they were created in
--- the 'Pinchot'.
+-- the 'Pinchot'.  When spliced, the 'DecsQ' is a list of
+-- declarations, each of which is an appropriate @data@ or @newtype@.
+-- For an example use of 'allRulesToCode', see
+-- "Pinchot.Examples.PostalAstAllRules".
+
 allRulesToCode
+
   :: Name
-  -- ^ Terminal type constructor name
+  -- ^ Terminal type constructor name.  Typically you will use the
+  -- Template Haskell quoting mechanism to get this.
+
   -> [Name]
-  -- ^ What to derive
+  -- ^ What to derive.  For instance, you might use @Eq@, @Ord@, and
+  -- @Show@ here.  Each created data type will derive these instances.
+
   -> Pinchot t a
+  -- ^ The return value from the 'Pinchot' is ignored.
+
   -> DecsQ
 allRulesToCode typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
@@ -426,10 +468,16 @@ allRulesToCode typeName derives pinchot = case ei of
 -- for its ancestors.
 ruleTreeToCode
   :: Name
-  -- ^ Terminal type constructor name
+  -- ^ Terminal type constructor name.  Typically you will use the
+  -- Template Haskell quoting mechanism to get this.
+
   -> [Name]
-  -- ^ What to derive
+  -- ^ What to derive.  For instance, you might use @Eq@, @Ord@, and
+  -- @Show@ here.  Each created data type will derive these instances.
+
   -> Pinchot t (Rule t)
+  -- ^ A data type is created for the 'Rule' that the 'Pinchot'
+  -- returns, and for the ancestors of the 'Rule'.
   -> DecsQ
 ruleTreeToCode typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
@@ -444,9 +492,11 @@ ruleTreeToCode typeName derives pinchot = case ei of
 
 ruleToParser
   :: Syntax.Lift t
-  => Rule t
+  => String
+  -- ^ Module prefix
+  -> Rule t
   -> Q [Stmt]
-ruleToParser (Rule nm mayDescription rt) = case rt of
+ruleToParser prefix (Rule nm mayDescription rt) = case rt of
 
   RTerminal ivls -> do
     topRule <- makeRule expression
@@ -458,10 +508,10 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
     topRule <- makeRule expression
     return [topRule]
     where
-      expression = foldl addBranch (branchToParser b1) bs
+      expression = foldl addBranch (branchToParser prefix b1) bs
         where
           addBranch tree branch =
-            [| $tree <|> $(branchToParser branch) |]
+            [| $tree <|> $(branchToParser prefix branch) |]
 
   RSeqTerm sq -> do
     let nestRule = bindS (varP helper) [|rule $(go sq)|]
@@ -512,10 +562,23 @@ ruleToParser (Rule nm mayDescription rt) = case rt of
       [|rule ($expression Text.Earley.<?> $(textToExp desc))|]
     desc = maybe nm id mayDescription
     textToExp txt = [| $(Syntax.lift txt) |]
-    constructor = conE (mkName nm)
+    constructor = constructorName prefix nm
     wrapper wrapRule = [|fmap $constructor $(varE wrapRule) |]
     helper = helperName nm
 
+
+constructorName
+  :: String
+  -- ^ Module prefix
+  -> String
+  -- ^ Name of constructor
+  -> ExpQ
+constructorName pfx nm = conE (mkName name)
+  where
+    name = pfx' ++ nm
+    pfx'
+      | null pfx = ""
+      | otherwise = pfx ++ "."
 
 ruleName :: String -> Name
 ruleName suffix = mkName ("r'" ++ suffix)
@@ -525,16 +588,18 @@ helperName suffix = mkName ("h'" ++ suffix)
 
 branchToParser
   :: Syntax.Lift t
-  => Branch t
+  => String
+  -- ^ Module prefix
+  -> Branch t
   -> ExpQ
-branchToParser (Branch name rules) = case rules of
+branchToParser prefix (Branch name rules) = case rules of
   [] -> [| pure $constructor |]
   (Rule rule1 _ _) : xs -> foldl f z xs
     where
       z = [| $constructor <$> $(varE (ruleName rule1)) |]
       f soFar (Rule rule2 _ _) = [| $soFar <*> $(varE (ruleName rule2)) |]
   where
-    constructor = conE (mkName name)
+    constructor = constructorName prefix name
     
 -- | Creates a lazy pattern for all the given names.  Adds an empty
 -- pattern onto the front.
@@ -557,18 +622,47 @@ bigTuple top = finish . foldr f [| () |]
     f n rest = [| ( $(varE n), $rest) |]
     finish tup = [| ($(varE top), $tup) |]
 
+-- | Creates an Earley parser for a given 'Rule'.  For examples of how
+-- to use this, see the source code for
+-- "Pinchot.Examples.PostalAstRuleTree" and for
+-- "Pinchot.Examples.PostalAstAllRules".
+
 earleyParser
   :: Syntax.Lift t
-  => Pinchot t (Rule t)
+
+  => String
+  -- ^ Module prefix.  You have to make sure that the data types you
+  -- created with 'ruleTreeToCode' or with 'allRulesToCode' are
+  -- @import@ed into scope.  The spliced Template Haskell code has to
+  -- know where to look for these data types.  If you did an
+  -- unqualified @import@, just pass the empty string here.  If you
+  -- did a qualified import, pass the appropriate namespace here.
+  --
+  -- For example, if you used @import qualified MyAst@, pass
+  -- @\"MyAst\"@ here.  If you used @import qualified
+  -- Data.MyLibrary.MyAst as MyLibrary.MyAst@, pass
+  -- @\"MyLibrary.MyAst\"@ here.
+  --
+  -- For an example using an unqualified import, see
+  -- "Pinchot.Examples.PostalAstRuleTree" or
+  -- "Pinchot.Examples.PostalAstAllRules".
+  --
+  -- For an example using a qualified import, see
+  -- "Pinchot.Examples.QualifiedImport".
+
+  -> Pinchot t (Rule t)
+  -- ^ Creates an Earley parser for the 'Rule' that the 'Pinchot'
+  -- returns.
   -> Q Exp
-earleyParser pinc = case ei of
+earleyParser prefix pinc = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
   Right rule@(Rule top _ _) -> do
     let neededRules = ruleAndAncestors rule
         otherNames = rulesDemandedBeforeDefined neededRules
         lamb = lamE [lazyPattern otherNames] expression
         expression = do
-          stmts <- fmap concat . mapM ruleToParser . toList $ neededRules
+          stmts <- fmap concat . mapM (ruleToParser prefix)
+            . toList $ neededRules
           result <- bigTuple (ruleName top) otherNames
           rtn <- [|return|]
           let returner = rtn `AppE` result
