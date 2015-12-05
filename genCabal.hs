@@ -69,19 +69,39 @@ props = blank
 main :: IO ()
 main = defaultMain $ do
   libMods <- modules "lib"
+  buildExe <- makeFlag "executables" $ FlagOpts
+    { flagDescription = "Build executables"
+    , flagDefault = False
+    , flagManual = True
+    }
   return
     ( props
     ,   exposedModules libMods
       : buildDepends libraryDepends
       : commonOptions
     , [ githubHead "massysett" "penny"
-      , testSuite "postal-parser" $
-        [ mainIs "postal-parser.hs"
-        , exitcodeStdio
-        , otherModules libMods
-        , hsSourceDirs ["tests"]
-        , buildDepends libraryDepends
-        ] ++ commonOptions
+      , executable "print-postal-parser" $
+        [ mainIs "print-postal-parser.hs"
+        , condBlock (flag buildExe)
+            (buildable True, ( [ otherModules libMods
+                               , hsSourceDirs ["exe"]
+                               , buildDepends libraryDepends
+                               ] ++ commonOptions
+                             )
+            )
+            [buildable False]
+        ]
 
+      , executable "postal-parser" $
+        [ mainIs "postal-parser.hs"
+        , condBlock (flag buildExe)
+            (buildable True, ( [ otherModules libMods
+                               , hsSourceDirs ["exe"]
+                               , buildDepends libraryDepends
+                               ] ++ commonOptions
+                             )
+            )
+            [buildable False]
+        ]
       ]
     )

@@ -639,18 +639,21 @@ earleyParser
 
   => String
   -- ^ Module prefix.  You have to make sure that the data types you
-  -- created with 'ruleTreeToCode' or with 'allRulesToCode' are
-  -- @import@ed into scope.  The spliced Template Haskell code has to
-  -- know where to look for these data types.  If you did an
-  -- unqualified @import@, just pass the empty string here.  If you
-  -- did a qualified import, pass the appropriate namespace here.
+  -- created with 'ruleTreeToCode' or with 'allRulesToCode' are in
+  -- scope, either because they were spliced into the same module that
+  -- 'earleyParser' is spliced into, or because they are @import@ed
+  -- into scope.  The spliced Template Haskell code has to know where
+  -- to look for these data types.  If you did an unqualified @import@
+  -- or if the types are in the same module as is the splice of
+  -- 'earleyParser', just pass the empty string here.  If you did a
+  -- qualified import, pass the appropriate namespace here.
   --
   -- For example, if you used @import qualified MyAst@, pass
   -- @\"MyAst\"@ here.  If you used @import qualified
   -- Data.MyLibrary.MyAst as MyLibrary.MyAst@, pass
   -- @\"MyLibrary.MyAst\"@ here.
   --
-  -- For an example using an unqualified import, see
+  -- For an example where the types are in the same module, see
   -- "Pinchot.Examples.PostalAstRuleTree" or
   -- "Pinchot.Examples.PostalAstAllRules".
   --
