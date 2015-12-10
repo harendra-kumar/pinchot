@@ -54,6 +54,8 @@ module Pinchot
   , terminal
   , terminalSeq
   , nonTerminal
+  , union
+  , record
 
   -- * Rules that modify other rules
   , list
@@ -84,15 +86,43 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid ((<>))
 import Data.Set (Set)
+import Data.Sequence (Seq, ViewL(EmptyL, (:<)), viewl, (<|))
+import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import Data.Typeable (Typeable)
 import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
    cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
-   varE, varP, conE, Pat, Exp(AppE, DoE), lamE)
+   varE, varP, conE, Pat, Exp(AppE, DoE), lamE, recC, varStrictType)
 import qualified Language.Haskell.TH.Syntax as Syntax
 import Text.Earley (satisfy, rule, symbol)
 import qualified Text.Earley ((<?>))
+
+-- | Type synonym for the name of a production rule.  
+-- This will be the name of the type constructor for the corresponding
+-- type in the AST, so this must be a valid Haskell type constructor
+-- name.
+--
+-- If you are creating a 'terminal', 'option', 'list', 'list1', or
+-- 'wrap', the 'RuleName' will also be used for the name of the single
+-- data construtor.  If you are creating a 'nonTerminal', you will
+-- specify the name of each data constructor with 'AlternativeName'.
+type RuleName = String
+
+-- | Type synonym the the name of an alternative in a 'nonTerminal'.
+-- This name must not conflict with any other data constructor, either
+-- one specified as an 'AlternativeName' or one that was created using
+-- 'terminal', 'option', 'list', or 'list1'.
+type AlternativeName = String
+
+-- | Type synonym for the name of a field in a record.
+type FieldName = String
+
+-- | A branch in a sum rule.  In @Branch s ls@, @s@ is the name of the
+-- data constructor, and @ls@ is the list of rules that this branch
+-- produces.
+data Branch t = Branch String [(Rule t)]
+  deriving (Eq, Ord, Show)
 
 data RuleType t
   = RTerminal (Intervals t)
@@ -102,6 +132,7 @@ data RuleType t
   | RMany (Rule t)
   | RMany1 (Rule t)
   | RWrap (Rule t)
+  | RRecord (Seq (FieldName, Rule t))
   deriving (Eq, Ord, Show)
 
 -- Rule n d t, where
@@ -130,9 +161,6 @@ label s (Rule n _ t) = Rule n (Just s) t
 (<?>) :: Pinchot t (Rule t) -> String -> Pinchot t (Rule t)
 p <?> s = fmap (label s) p
 infixr 0 <?>
-
-data Branch t = Branch String [(Rule t)]
-  deriving (Eq, Ord, Show)
 
 data Names t = Names
   { tyConNames :: Set RuleName
@@ -217,24 +245,8 @@ newRule name ty = Pinchot $ do
                             (allRules st)
                  }
   lift (put newSt)
+  runPinchot $ addDataConNames r
   return r
-
--- | Type synonym for the name of a production rule.  
--- This will be the name of the type constructor for the corresponding
--- type in the AST, so this must be a valid Haskell type constructor
--- name.
---
--- If you are creating a 'terminal', 'option', 'list', 'list1', or
--- 'wrap', the 'RuleName' will also be used for the name of the single
--- data construtor.  If you are creating a 'nonTerminal', you will
--- specify the name of each data constructor with 'AlternativeName'.
-type RuleName = String
-
--- | Type synonym the the name of an alternative in a 'nonTerminal'.
--- This name must not conflict with any other data constructor, either
--- one specified as an 'AlternativeName' or one that was created using
--- 'terminal', 'option', 'list', or 'list1'.
-type AlternativeName = String
 
 -- | Creates a terminal production rule.
 terminal
@@ -284,10 +296,43 @@ nonTerminal
   -> Pinchot t (Rule t)
 
 nonTerminal name sq = do
-  mapM_ addDataConName . fmap fst $ sq
   (b1, bs) <- splitNonTerminal name sq
   let branches = RBranch (uncurry Branch b1, fmap (uncurry Branch) bs)
   newRule name branches
+
+ruleConstructorNames
+  :: Rule t
+  -> Seq AlternativeName
+ruleConstructorNames (Rule n _ t) = case t of
+  RTerminal _ -> Seq.singleton n
+  RBranch (b1, bs) -> branchName b1 <| Seq.fromList (fmap branchName bs)
+    where
+      branchName (Branch x _) = x
+  RSeqTerm _ -> Seq.singleton n
+  ROptional _ -> Seq.singleton n
+  RMany _ -> Seq.singleton n
+  RMany1 _ -> Seq.singleton n
+  RWrap _ -> Seq.singleton n
+
+addDataConNames :: Rule t -> Pinchot t ()
+addDataConNames = mapM_ addDataConName . ruleConstructorNames
+
+-- | Creates a new non-terminal production rule where
+-- each alternative produces only one rule.
+union
+  :: RuleName
+  -> [(AlternativeName, Rule t)]
+  -> Pinchot t (Rule t)
+union name = nonTerminal name . fmap (\(n, r) -> (n, [r]))
+
+-- | Creates a new non-terminal production rule with only one
+-- alternative where each field has a record name.
+record
+  :: RuleName
+  -> Seq (FieldName, Rule t)
+  -> Pinchot t (Rule t)
+record name sq = newRule name (RRecord sq)
+
 
 -- | Creates a rule for the production of a sequence of other rules.
 list
@@ -357,6 +402,9 @@ getAncestors r@(Rule name _ ei) = do
         RWrap c -> do
           cs <- getAncestors c
           return $ r : cs
+        RRecord ls -> do
+          cs <- fmap join . mapM getAncestors . toList . fmap snd $ ls
+          return $ r : cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
@@ -384,6 +432,7 @@ rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Set.empty)
           RMany r -> addHelper $ checkRule r results
           RMany1 r -> addHelper $ checkRule r results
           RWrap r -> checkRule r results
+          RRecord sq -> foldr checkRule results . fmap snd $ sq
         checkRule (Rule name _ _) rslts
           | Set.member name lhsDefined = rslts
           | otherwise = Set.insert (ruleName name) rslts
@@ -446,6 +495,11 @@ thRule typeName derives (Rule nm _ ruleType) = case ruleType of
       newtypeCon = normalC name
         [ strictType notStrict (conT (mkName inner)) ]
 
+  RRecord sq -> dataD (cxt []) name [] [ctor] derives
+    where
+      ctor = recC name . fmap mkField . toList $ sq
+      mkField (fldName, Rule rn _ _) = varStrictType (mkName fldName)
+        (strictType notStrict (conT (mkName rn)))
 
   where
     name = mkName nm
@@ -583,6 +637,16 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
   RWrap (Rule innerNm _ _) -> fmap (:[]) (makeRule expression)
     where
       expression = [|fmap $constructor $(varE (ruleName innerNm)) |]
+
+  RRecord sq -> fmap (:[]) (makeRule expression)
+    where
+      expression = case viewl sq of
+        EmptyL -> [| pure $constructor |]
+        (_, Rule r1 _ _) :< restFields -> foldl addField fstField restFields
+          where
+            fstField = [| $constructor <$> $(varE (ruleName r1)) |]
+            addField soFar (_, (Rule r _ _))
+              = [| $soFar <*> $(varE (ruleName r)) |]
     
 
   where

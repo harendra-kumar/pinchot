@@ -6,7 +6,7 @@ module Main where
 import Cartel
 
 pinchotVer :: [Word]
-pinchotVer = [0,2,0,0]
+pinchotVer = [0,3,0,0]
 
 atleast :: NonEmptyString -> Version -> Package
 atleast n v = package n (gtEq v)
@@ -28,6 +28,9 @@ earley = atleast "Earley" [0,10,1,0]
 
 prettyShow :: Package
 prettyShow = atleast "pretty-show" [1,6,9]
+
+lens :: Package
+lens = atleast "lens" [4,13]
 
 commonOptions :: HasBuildInfo a => [a]
 commonOptions =
