@@ -53,17 +53,7 @@ postal = mdo
   optDirection <- option "MaybeDirection" directionSpace
   optSuffix <- option "MaybeSuffix" spaceSuffix
   address <- record "Address"
-    [ ("_number", number), ("_space", space), ("_optDirection", optDirection),
-      ("_streetName", streetName), ("_optSuffix", optSuffix),
-      ("_comma", comma), ("_space1", space), ("_city", city), ("_state", state),
-      ("_zipCode", zipCode)
+    [ number, space, optDirection, streetName, optSuffix,
+      comma, space, city, state, zipCode
     ]
-    
-
-{-
-  address <- nonTerminal "Address"
-    [("Address", [ number, space, optDirection, streetName, optSuffix,
-                   comma, space, city, comma, space, state,
-                   space, zipCode ])]
--}
   return address

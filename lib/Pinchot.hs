@@ -75,6 +75,7 @@ import Pinchot.Intervals
 
 import Control.Applicative ((<|>), liftA2)
 import Control.Exception (Exception)
+import qualified Control.Lens as Lens
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix, mfix)
 import Control.Monad.Trans.Class (lift)
@@ -94,6 +95,7 @@ import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
    cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
    varE, varP, conE, Pat, Exp(AppE, DoE), lamE, recC, varStrictType)
+import qualified Language.Haskell.TH as TH
 import qualified Language.Haskell.TH.Syntax as Syntax
 import Text.Earley (satisfy, rule, symbol)
 import qualified Text.Earley ((<?>))
@@ -115,9 +117,6 @@ type RuleName = String
 -- 'terminal', 'option', 'list', or 'list1'.
 type AlternativeName = String
 
--- | Type synonym for the name of a field in a record.
-type FieldName = String
-
 -- | A branch in a sum rule.  In @Branch s ls@, @s@ is the name of the
 -- data constructor, and @ls@ is the list of rules that this branch
 -- produces.
@@ -132,7 +131,7 @@ data RuleType t
   | RMany (Rule t)
   | RMany1 (Rule t)
   | RWrap (Rule t)
-  | RRecord (Seq (FieldName, Rule t))
+  | RRecord (Seq (Rule t))
   deriving (Eq, Ord, Show)
 
 -- Rule n d t, where
@@ -313,6 +312,7 @@ ruleConstructorNames (Rule n _ t) = case t of
   RMany _ -> Seq.singleton n
   RMany1 _ -> Seq.singleton n
   RWrap _ -> Seq.singleton n
+  RRecord _ -> Seq.singleton n
 
 addDataConNames :: Rule t -> Pinchot t ()
 addDataConNames = mapM_ addDataConName . ruleConstructorNames
@@ -329,7 +329,7 @@ union name = nonTerminal name . fmap (\(n, r) -> (n, [r]))
 -- alternative where each field has a record name.
 record
   :: RuleName
-  -> Seq (FieldName, Rule t)
+  -> Seq (Rule t)
   -> Pinchot t (Rule t)
 record name sq = newRule name (RRecord sq)
 
@@ -403,7 +403,7 @@ getAncestors r@(Rule name _ ei) = do
           cs <- getAncestors c
           return $ r : cs
         RRecord ls -> do
-          cs <- fmap join . mapM getAncestors . toList . fmap snd $ ls
+          cs <- fmap join . mapM getAncestors . toList $ ls
           return $ r : cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
@@ -432,7 +432,7 @@ rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Set.empty)
           RMany r -> addHelper $ checkRule r results
           RMany1 r -> addHelper $ checkRule r results
           RWrap r -> checkRule r results
-          RRecord sq -> foldr checkRule results . fmap snd $ sq
+          RRecord sq -> foldr checkRule results $ sq
         checkRule (Rule name _ _) rslts
           | Set.member name lhsDefined = rslts
           | otherwise = Set.insert (ruleName name) rslts
@@ -465,11 +465,11 @@ thRule typeName derives (Rule nm _ ruleType) = case ruleType of
     where
       cons = thBranch b1 : toList (fmap thBranch bs)
 
-  RSeqTerm _ -> dataD (cxt []) name [] cons derives
+  RSeqTerm _ -> newtypeD (cxt []) name [] cons derives
     where
-      cons = [normalC name
-        [strictType notStrict (appT [t| [] |]
-                                    (conT typeName))]]
+      cons = normalC name
+        [strictType notStrict (appT [t| Seq |]
+                                    (conT typeName))]
 
   ROptional (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
@@ -480,15 +480,14 @@ thRule typeName derives (Rule nm _ ruleType) = case ruleType of
   RMany (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
-        [strictType notStrict (appT [t| [] |]
+        [strictType notStrict (appT [t| Seq |]
                                     (conT (mkName inner)))]
 
-  RMany1 (Rule inner _ _) -> dataD (cxt []) name [] [cons] derives
+  RMany1 (Rule inner _ _) -> newtypeD (cxt []) name [] cons derives
     where
       cons = normalC name
-        [ strictType notStrict (conT (mkName inner))
-        , strictType notStrict (appT [t| [] |]
-                                     (conT (mkName inner)))]
+        [ strictType notStrict ([t| (,) |] `appT` (conT (mkName inner))
+            `appT` ([t| Seq |] `appT` (conT (mkName inner)))) ]
 
   RWrap (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
@@ -497,9 +496,11 @@ thRule typeName derives (Rule nm _ ruleType) = case ruleType of
 
   RRecord sq -> dataD (cxt []) name [] [ctor] derives
     where
-      ctor = recC name . fmap mkField . toList $ sq
-      mkField (fldName, Rule rn _ _) = varStrictType (mkName fldName)
+      ctor = recC name . zipWith mkField [(0 :: Int) ..] . toList $ sq
+      mkField num (Rule rn _ _) = varStrictType (mkName fldNm)
         (strictType notStrict (conT (mkName rn)))
+        where
+          fldNm = "_f'" ++ nm ++ "'" ++ show num ++ "'" ++ rn
 
   where
     name = mkName nm
@@ -516,6 +517,41 @@ thAllRules typeName derives
   . fmap (thRule typeName derives)
   . fmap snd
   . M.toAscList
+
+ruleToLens
+  :: Name
+  -- ^ Terminal type name
+  -> Rule t
+  -> TH.Q [TH.Dec]
+ruleToLens terminalName (Rule nm _ ty) = case ty of
+
+  RTerminal _ -> sequence [TH.instanceD (return []) typ decs]
+    where
+      typ = (TH.conT ''Lens.Wrapped) `TH.appT` ruleType
+      decs = [assocType, wrapper]
+        where
+          assocType = TH.tySynD ''Lens.Unwrapped
+            [TH.PlainTV (mkName nm)] (TH.conT terminalName)
+          wrapper = TH.funD 'Lens._Wrapped
+            [TH.clause [] (TH.normalB body) []]
+            where
+              body = (TH.varE 'Lens.iso)
+                `TH.appE` (fmap unwrap (TH.newName "x"))
+                `TH.appE` (fmap doWrap (TH.newName "x"))
+                where
+                  unwrap lambName = TH.LamE [lambPat] (TH.VarE lambName)
+                    where
+                      lambPat = TH.ConP (TH.mkName nm) [TH.VarP lambName]
+                  doWrap = undefined
+{-
+      wrapper = TH.FunD (TH.mkName "_Wrapped") [TH.Clause [] body []]
+        where
+          body = undefined
+-}
+
+  where
+    ruleType = TH.conT (mkName nm)
+    local = mkName "_x"
 
 
 -- | Creates code for every 'Rule' created in the 'Pinchot'.  The data
@@ -599,8 +635,8 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
     let nestRule = bindS (varP helper) [|rule $(go sq)|]
           where
             go sqnce = case sqnce of
-              [] -> [|pure []|]
-              x : xs -> [|liftA2 (:) (symbol x) $(go xs)|]
+              [] -> [|pure Seq.empty|]
+              x : xs -> [|liftA2 (<|) (symbol x) $(go xs)|]
     nest <- nestRule
     topRule <- makeRule (wrapper helper)
     return [nest, topRule]
@@ -614,9 +650,9 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
   RMany (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
-            parseSeq = uInfixE [|pure []|] [|(<|>)|] pSeq
+            parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
               where
-                pSeq = [|liftA2 (:) $(varE (ruleName innerNm)) $(varE helper) |]
+                pSeq = [|liftA2 (<|) $(varE (ruleName innerNm)) $(varE helper) |]
     nest <- nestRule
     top <- makeRule $ wrapper helper
     return [nest, top]
@@ -624,13 +660,14 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
   RMany1 (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) [|rule $(parseSeq)|]
           where
-            parseSeq = [| pure [] <|> $pSeq |]
+            parseSeq = [| pure Seq.empty <|> $pSeq |]
               where
-                pSeq = [| (:) <$> $(varE (ruleName innerNm))
-                              <*> $(varE helper) |]
+                pSeq = [| (<|) <$> $(varE (ruleName innerNm))
+                               <*> $(varE helper) |]
     nest <- nestRule
-    let topExpn = [| $constructor <$> $(varE (ruleName innerNm))
-                                  <*> $(varE helper) |]
+    let topExpn = [| $constructor <$> ( (,) <$> $(varE (ruleName innerNm))
+                                        <*> $(varE helper)
+                                      ) |]
     top <- makeRule topExpn
     return [nest, top]
 
@@ -642,10 +679,10 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
     where
       expression = case viewl sq of
         EmptyL -> [| pure $constructor |]
-        (_, Rule r1 _ _) :< restFields -> foldl addField fstField restFields
+        Rule r1 _ _ :< restFields -> foldl addField fstField restFields
           where
             fstField = [| $constructor <$> $(varE (ruleName r1)) |]
-            addField soFar (_, (Rule r _ _))
+            addField soFar (Rule r _ _)
               = [| $soFar <*> $(varE (ruleName r)) |]
     
 

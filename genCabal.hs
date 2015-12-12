@@ -42,7 +42,7 @@ commonOptions =
 
 libraryDepends :: [Package]
 libraryDepends = [ base, containers, transformers, templateHaskell,
-  earley ]
+  earley, lens ]
 
 props :: Properties
 props = blank
