@@ -95,7 +95,7 @@ import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import Data.Typeable (Typeable)
 import Language.Haskell.TH
-  (ExpQ, ConQ, normalC, mkName, strictType, notStrict, DecQ, newtypeD,
+  (ExpQ, ConQ, normalC, mkName, strictType, notStrict, newtypeD,
    cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
    varE, varP, conE, Pat, Exp(AppE, DoE), lamE, recC, varStrictType)
 import qualified Language.Haskell.TH as TH
@@ -508,7 +508,7 @@ makeType typeName derives nm ruleType = case ruleType of
   RMany1 (Rule inner _ _) -> newtypeD (cxt []) name [] cons derives
     where
       cons = normalC name
-        [ strictType notStrict ([t| (,) |] `appT` (conT (mkName inner))
+        [ strictType notStrict (TH.tupleT 2 `appT` (conT (mkName inner))
             `appT` ([t| Seq |] `appT` (conT (mkName inner)))) ]
 
   RWrap (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
@@ -522,10 +522,21 @@ makeType typeName derives nm ruleType = case ruleType of
       mkField num (Rule rn _ _) = varStrictType (mkName fldNm)
         (strictType notStrict (conT (mkName rn)))
         where
-          fldNm = "_f'" ++ nm ++ "'" ++ show num ++ "'" ++ rn
+          fldNm = '_' : fieldName num nm rn
 
   where
     name = mkName nm
+
+-- | Field name - without a leading underscore
+fieldName
+  :: Int
+  -- ^ Index
+  -> String
+  -- ^ Parent type name
+  -> String
+  -- ^ Inner type name
+  -> String
+fieldName idx par inn = "f'" ++ par ++ "'" ++ show idx ++ "'" ++ inn
 
 thAllRules
   :: Bool
@@ -544,12 +555,12 @@ thAllRules doOptics typeName derives
   . M.toAscList
 
 makeWrapped
-  :: String
-  -- ^ Name of wrapper type
-  -> TH.Type
+  :: TH.Type
   -- ^ Name of wrapped type
+  -> String
+  -- ^ Name of wrapper type
   -> TH.Dec
-makeWrapped nm wrappedType = TH.InstanceD [] typ decs
+makeWrapped wrappedType nm = TH.InstanceD [] typ decs
   where
     name = TH.mkName nm
     local = mkName "_x"
@@ -580,38 +591,51 @@ terminalToLens
   -> String
   -- ^ Rule name
   -> TH.Dec
-terminalToLens terminalName nm = TH.InstanceD [] typ decs
+terminalToLens terminalName = makeWrapped term
   where
-    name = TH.mkName nm
-    local = mkName "_x"
-    typ = (TH.ConT ''Lens.Wrapped) `TH.AppT` (TH.ConT name)
-    decs = [assocType, wrapper]
-      where
-        assocType = TH.TySynInstD ''Lens.Unwrapped
-          (TH.TySynEqn [TH.ConT name] (TH.ConT terminalName))
-        wrapper = TH.FunD 'Lens._Wrapped
-          [TH.Clause [] (TH.NormalB body) []]
-          where
-            body = (TH.VarE 'Lens.iso)
-              `TH.AppE` unwrap
-              `TH.AppE` doWrap
-              where
-                unwrap = TH.LamE [lambPat] (TH.VarE local)
-                  where
-                    lambPat = TH.ConP name [TH.VarP local]
-                doWrap = TH.LamE [lambPat] expn
-                  where
-                    expn = (TH.ConE name)
-                      `TH.AppE` (TH.VarE local)
-                    lambPat = TH.VarP local
+    term = TH.ConT terminalName
 
 optionalToLens
   :: String
-  -- ^ Rule name
-  -> String
   -- ^ Wrapped rule name
+  -> String
+  -- ^ Wrapping Rule name
   -> TH.Dec
-optionalToLens terminalName wrappedName = undefined
+optionalToLens wrappedName = makeWrapped maybeName
+  where
+    maybeName = (TH.ConT ''Maybe) `TH.AppT` (TH.ConT (TH.mkName wrappedName))
+
+many1ToLens
+  :: String
+  -- ^ Wrapped rule name
+  -> String
+  -- ^ Wrapping Rule name
+  -> TH.Dec
+many1ToLens wrappedName = makeWrapped tupName
+  where
+    tupName = (TH.TupleT 2)
+      `TH.AppT` (TH.ConT (TH.mkName wrappedName))
+      `TH.AppT` ((TH.ConT ''Seq) `TH.AppT` (TH.ConT (TH.mkName wrappedName)))
+
+manyToLens
+  :: String
+  -- ^ Wrapped rule name
+  -> String
+  -- ^ Wrapping Rule name
+  -> TH.Dec
+manyToLens wrappedName = makeWrapped innerName
+  where
+    innerName = (TH.ConT ''Seq) `TH.AppT` (TH.ConT (TH.mkName wrappedName))
+
+wrapToLens
+  :: String
+  -- ^ Wrapped rule name
+  -> String
+  -- ^ Wrapping Rule name
+  -> TH.Dec
+wrapToLens wrappedName = makeWrapped innerName
+  where
+    innerName = TH.ConT (TH.mkName wrappedName)
 
 terminalSeqToLens
   :: Name
@@ -619,31 +643,55 @@ terminalSeqToLens
   -> String
   -- ^ Rule name
   -> TH.Dec
-terminalSeqToLens terminalName nm = TH.InstanceD [] typ decs
+terminalSeqToLens terminalName = makeWrapped sqType
   where
-    name = TH.mkName nm
-    local = mkName "_x"
-    typ = (TH.ConT ''Lens.Wrapped) `TH.AppT` (TH.ConT name)
-    decs = [assocType, wrapper]
+    sqType = (TH.ConT ''Seq) `TH.AppT` (TH.ConT terminalName)
+
+branchesToLenses
+  :: String
+  -- ^ Rule name
+  -> Branch t
+  -> [Branch t]
+  -> [TH.Dec]
+branchesToLenses nm b1 bs = concat $ makePrism b1 : fmap makePrism bs
+  where
+    makePrism (Branch inner rules) = undefined
+
+recordsToLenses
+  :: String
+  -- ^ Rule name
+  -> Seq (Rule t)
+  -> [TH.Dec]
+recordsToLenses nm
+  = concat . zipWith makeLens [(0 :: Int) ..] . toList
+  where
+    makeLens index (Rule inner _ _) = [ signature, function ]
       where
-        assocType = TH.TySynInstD ''Lens.Unwrapped
-          (TH.TySynEqn [TH.ConT name]
-            ((TH.ConT ''Seq) `TH.AppT` (TH.ConT terminalName)))
-        wrapper = TH.FunD 'Lens._Wrapped
-          [TH.Clause [] (TH.NormalB body) []]
+        fieldNm = fieldName index nm inner
+        lensName = mkName fieldNm
+        signature = TH.SigD lensName
+          $ (TH.ConT ''Lens.Lens')
+          `TH.AppT` (TH.ConT (TH.mkName nm))
+          `TH.AppT` (TH.ConT (TH.mkName inner))
+
+        function = TH.FunD lensName [TH.Clause [] (TH.NormalB body) []]
           where
-            body = (TH.VarE 'Lens.iso)
-              `TH.AppE` unwrap
-              `TH.AppE` doWrap
+            namedRec = TH.mkName "_namedRec"
+            namedNewVal = TH.mkName "_namedNewVal"
+            body = (TH.VarE 'Lens.lens) `TH.AppE` getter `TH.AppE` setter
               where
-                unwrap = TH.LamE [lambPat] (TH.VarE local)
+                getter = TH.LamE [pat] expn
                   where
-                    lambPat = TH.ConP name [TH.VarP local]
-                doWrap = TH.LamE [lambPat] expn
+                    pat = TH.VarP namedRec
+                    expn = (TH.VarE (TH.mkName ('_' : fieldNm)))
+                      `TH.AppE` (TH.VarE namedRec)
+
+                setter = TH.LamE [patRec, patNewVal] expn
                   where
-                    expn = (TH.ConE name)
-                      `TH.AppE` (TH.VarE local)
-                    lambPat = TH.VarP local
+                    patRec = TH.VarP namedRec
+                    patNewVal = TH.VarP namedNewVal
+                    expn = TH.RecUpdE (TH.VarE namedRec)
+                      [ (TH.mkName ('_' : fieldNm), TH.VarE namedNewVal) ]
 
 
 ruleToLens
@@ -655,8 +703,13 @@ ruleToLens
   -> [TH.Dec]
 ruleToLens terminalName nm ty = case ty of
   RTerminal _ -> [terminalToLens terminalName nm]
+  RBranch (b1, bs) -> [] -- branchesToLenses nm b1 bs
   RSeqTerm _ -> [terminalSeqToLens terminalName nm]
-  _ -> []
+  ROptional (Rule inner _ _) -> [optionalToLens inner nm]
+  RMany (Rule inner _ _) -> [manyToLens inner nm]
+  RMany1 (Rule inner _ _) -> [many1ToLens inner nm]
+  RWrap (Rule inner _ _) -> [wrapToLens inner nm]
+  RRecord recs -> recordsToLenses nm recs
 
 -- | Should optics be made?
 type MakeOptics = Bool
