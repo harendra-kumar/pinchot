@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- | Provides an example of the use of 'ruleTreeToCode'.  You will
 -- want to look at the source code, as it has a Template Haskell
@@ -18,7 +19,7 @@ import Text.Earley (Grammar, Prod)
 -- Unlike 'allRulesToCode', this splice will contain only the
 -- 'Address' rule and its ancestors.
 
-ruleTreeToCode ''Char [''Eq, ''Ord, ''Show] postal
+ruleTreeToCode makeOptics ''Char [''Eq, ''Ord, ''Show] postal
 
 -- | Earley grammar created using Template Haskell.
 

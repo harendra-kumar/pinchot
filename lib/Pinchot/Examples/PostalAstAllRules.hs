@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- | Provides an example of the use of 'ruleTreeToCode'.  You will
 -- want to look at the source code, as it has a Template Haskell
@@ -17,7 +18,7 @@ import Text.Earley (Grammar, Prod)
 -- with one declaration for each production rule in the grammar.
 -- Unlike 'ruleTreeToCode', this splice will contain every rule that
 -- was defined in the 'Pinchot'.
-allRulesToCode ''Char [''Eq, ''Ord, ''Show] postal
+allRulesToCode makeOptics ''Char [''Eq, ''Ord, ''Show] postal
 
 -- | Earley grammar created using Template Haskell.
 

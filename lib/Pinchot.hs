@@ -67,6 +67,9 @@ module Pinchot
 
   -- * Transforming an AST to code
   , earleyGrammar
+  , MakeOptics
+  , makeOptics
+  , noOptics
   , allRulesToCode
   , ruleTreeToCode
   ) where
@@ -540,21 +543,21 @@ thAllRules doOptics typeName derives
   . fmap snd
   . M.toAscList
 
-terminalToLens
-  :: Name
-  -- ^ Terminal type name
-  -> String
-  -- ^ Rule name
+makeWrapped
+  :: String
+  -- ^ Name of wrapper type
+  -> TH.Type
+  -- ^ Name of wrapped type
   -> TH.Dec
-terminalToLens terminalName nm = TH.InstanceD [] typ decs
+makeWrapped nm wrappedType = TH.InstanceD [] typ decs
   where
     name = TH.mkName nm
     local = mkName "_x"
     typ = (TH.ConT ''Lens.Wrapped) `TH.AppT` (TH.ConT name)
     decs = [assocType, wrapper]
       where
-        assocType = TH.TySynD ''Lens.Unwrapped
-          [TH.PlainTV name] (TH.ConT terminalName)
+        assocType = TH.TySynInstD ''Lens.Unwrapped
+          (TH.TySynEqn [TH.ConT name] wrappedType)
         wrapper = TH.FunD 'Lens._Wrapped
           [TH.Clause [] (TH.NormalB body) []]
           where
@@ -571,6 +574,78 @@ terminalToLens terminalName nm = TH.InstanceD [] typ decs
                       `TH.AppE` (TH.VarE local)
                     lambPat = TH.VarP local
 
+terminalToLens
+  :: Name
+  -- ^ Terminal type name
+  -> String
+  -- ^ Rule name
+  -> TH.Dec
+terminalToLens terminalName nm = TH.InstanceD [] typ decs
+  where
+    name = TH.mkName nm
+    local = mkName "_x"
+    typ = (TH.ConT ''Lens.Wrapped) `TH.AppT` (TH.ConT name)
+    decs = [assocType, wrapper]
+      where
+        assocType = TH.TySynInstD ''Lens.Unwrapped
+          (TH.TySynEqn [TH.ConT name] (TH.ConT terminalName))
+        wrapper = TH.FunD 'Lens._Wrapped
+          [TH.Clause [] (TH.NormalB body) []]
+          where
+            body = (TH.VarE 'Lens.iso)
+              `TH.AppE` unwrap
+              `TH.AppE` doWrap
+              where
+                unwrap = TH.LamE [lambPat] (TH.VarE local)
+                  where
+                    lambPat = TH.ConP name [TH.VarP local]
+                doWrap = TH.LamE [lambPat] expn
+                  where
+                    expn = (TH.ConE name)
+                      `TH.AppE` (TH.VarE local)
+                    lambPat = TH.VarP local
+
+optionalToLens
+  :: String
+  -- ^ Rule name
+  -> String
+  -- ^ Wrapped rule name
+  -> TH.Dec
+optionalToLens terminalName wrappedName = undefined
+
+terminalSeqToLens
+  :: Name
+  -- ^ Terminal type name
+  -> String
+  -- ^ Rule name
+  -> TH.Dec
+terminalSeqToLens terminalName nm = TH.InstanceD [] typ decs
+  where
+    name = TH.mkName nm
+    local = mkName "_x"
+    typ = (TH.ConT ''Lens.Wrapped) `TH.AppT` (TH.ConT name)
+    decs = [assocType, wrapper]
+      where
+        assocType = TH.TySynInstD ''Lens.Unwrapped
+          (TH.TySynEqn [TH.ConT name]
+            ((TH.ConT ''Seq) `TH.AppT` (TH.ConT terminalName)))
+        wrapper = TH.FunD 'Lens._Wrapped
+          [TH.Clause [] (TH.NormalB body) []]
+          where
+            body = (TH.VarE 'Lens.iso)
+              `TH.AppE` unwrap
+              `TH.AppE` doWrap
+              where
+                unwrap = TH.LamE [lambPat] (TH.VarE local)
+                  where
+                    lambPat = TH.ConP name [TH.VarP local]
+                doWrap = TH.LamE [lambPat] expn
+                  where
+                    expn = (TH.ConE name)
+                      `TH.AppE` (TH.VarE local)
+                    lambPat = TH.VarP local
+
+
 ruleToLens
   :: Name
   -- ^ Terminal type name
@@ -580,7 +655,47 @@ ruleToLens
   -> [TH.Dec]
 ruleToLens terminalName nm ty = case ty of
   RTerminal _ -> [terminalToLens terminalName nm]
+  RSeqTerm _ -> [terminalSeqToLens terminalName nm]
+  _ -> []
 
+-- | Should optics be made?
+type MakeOptics = Bool
+
+-- | Creates optics.  If you use this option you will need to have a
+--
+-- {-\# LANGUAGE TypeFamilies \#-}
+--
+-- pragma at the top of the module in which you splice this in.
+--
+-- Creates the listed optics for each kind of
+-- 'Rule', as follows:
+--
+-- * 'terminal': 'Lens.Wrapped', wrapping the type of the terminal.
+--
+-- * 'terminalSeq': 'Lens.Wrapped', wrapping a @'Seq' a@, where @a@ is
+-- the type of the terminal.
+--
+-- * 'nonTerminal': one 'Lens.Prism' for each data constructor (even if
+-- there is only one data constructor)
+--
+-- * 'union': one 'Lens.Prism' for each data constructor (even if
+-- there is only one data constructor)
+--
+-- * 'record': one 'Lens.Lens' for each field
+--
+-- * 'list': 'Lens.Wrapped', wrapping a @'Seq' a@
+--
+-- * 'list1': 'Lens.Wrapped', wrapping a pair @(a, 'Seq' a)@
+--
+-- * 'option': 'Lens.Wrapped', wrapping a @'Maybe' a@
+--
+-- * 'wrap': 'Lens.Wrapped', wrapping the underlying type
+makeOptics :: MakeOptics
+makeOptics = True
+
+-- | Do not make any optics.
+noOptics :: MakeOptics
+noOptics = False
 
 -- | Creates code for every 'Rule' created in the 'Pinchot'.  The data
 -- types are created in the same order in which they were created in
@@ -591,8 +706,7 @@ ruleToLens terminalName nm ty = case ty of
 
 allRulesToCode
 
-  :: Bool
-  -- ^ If True, make optics as well.
+  :: MakeOptics
 
   -> Name
   -- ^ Terminal type constructor name.  Typically you will use the
@@ -616,8 +730,7 @@ allRulesToCode doOptics typeName derives pinchot = case ei of
 -- | Creates code only for the 'Rule' returned from the 'Pinchot', and
 -- for its ancestors.
 ruleTreeToCode
-  :: Bool
-  -- ^ If True, make optics.
+  :: MakeOptics
 
   -> Name
   -- ^ Terminal type constructor name.  Typically you will use the
