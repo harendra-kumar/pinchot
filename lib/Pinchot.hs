@@ -448,14 +448,33 @@ thBranch (Branch nm rules) = normalC name fields
 
 
 thRule
-  :: Name
+  :: Bool
+  -- ^ If True, make lenses.
+  -> Name
   -- ^ Name of terminal type
   -> [Name]
   -- ^ What to derive
   -> Rule t
-  -> DecQ
-thRule typeName derives (Rule nm _ ruleType) = case ruleType of
+  -> TH.Q [TH.Dec]
+thRule doLenses typeName derives (Rule nm _ ruleType) = do
+  ty <- makeType typeName derives nm ruleType
+  return (ty : lenses)
+  where
+    lenses
+      | doLenses = ruleToLens typeName nm ruleType
+      | otherwise = []
 
+
+makeType
+  :: Name
+  -- ^ Name of terminal type
+  -> [Name]
+  -- ^ What to derive
+  -> String
+  -- ^ Name of rule
+  -> RuleType t
+  -> TH.Q TH.Dec
+makeType typeName derives nm ruleType = case ruleType of
   RTerminal _ -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
@@ -506,15 +525,18 @@ thRule typeName derives (Rule nm _ ruleType) = case ruleType of
     name = mkName nm
 
 thAllRules
-  :: Name
+  :: Bool
+  -- ^ If True, make optics as well.
+  -> Name
   -- ^ Terminal type constructor name
   -> [Name]
   -- ^ What to derive
   -> Map Int (Rule t)
   -> DecsQ
-thAllRules typeName derives
-  = sequence
-  . fmap (thRule typeName derives)
+thAllRules doOptics typeName derives
+  = fmap join
+  . sequence
+  . fmap (thRule doOptics typeName derives)
   . fmap snd
   . M.toAscList
 
@@ -552,9 +574,11 @@ terminalToLens terminalName nm = TH.InstanceD [] typ decs
 ruleToLens
   :: Name
   -- ^ Terminal type name
-  -> Rule t
+  -> String
+  -- ^ Rule name
+  -> RuleType t
   -> [TH.Dec]
-ruleToLens terminalName (Rule nm _ ty) = case ty of
+ruleToLens terminalName nm ty = case ty of
   RTerminal _ -> [terminalToLens terminalName nm]
 
 
@@ -567,7 +591,10 @@ ruleToLens terminalName (Rule nm _ ty) = case ty of
 
 allRulesToCode
 
-  :: Name
+  :: Bool
+  -- ^ If True, make optics as well.
+
+  -> Name
   -- ^ Terminal type constructor name.  Typically you will use the
   -- Template Haskell quoting mechanism to get this.
 
@@ -579,9 +606,9 @@ allRulesToCode
   -- ^ The return value from the 'Pinchot' is ignored.
 
   -> DecsQ
-allRulesToCode typeName derives pinchot = case ei of
+allRulesToCode doOptics typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right _ -> thAllRules typeName derives (allRules st')
+  Right _ -> thAllRules doOptics typeName derives (allRules st')
   where
     (ei, st') = runState (runExceptT (runPinchot pinchot))
       (Names Set.empty Set.empty 0 M.empty)
@@ -589,7 +616,10 @@ allRulesToCode typeName derives pinchot = case ei of
 -- | Creates code only for the 'Rule' returned from the 'Pinchot', and
 -- for its ancestors.
 ruleTreeToCode
-  :: Name
+  :: Bool
+  -- ^ If True, make optics.
+
+  -> Name
   -- ^ Terminal type constructor name.  Typically you will use the
   -- Template Haskell quoting mechanism to get this.
 
@@ -601,9 +631,10 @@ ruleTreeToCode
   -- ^ A data type is created for the 'Rule' that the 'Pinchot'
   -- returns, and for the ancestors of the 'Rule'.
   -> DecsQ
-ruleTreeToCode typeName derives pinchot = case ei of
+ruleTreeToCode doOptics typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
-  Right r -> sequence . toList . fmap (thRule typeName derives)
+  Right r -> fmap join . sequence . toList
+    . fmap (thRule doOptics typeName derives)
     . runCalc . getAncestors $ r
   where
     runCalc stateCalc = fst $ runState stateCalc (Set.empty)
