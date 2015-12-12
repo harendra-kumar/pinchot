@@ -518,40 +518,44 @@ thAllRules typeName derives
   . fmap snd
   . M.toAscList
 
+terminalToLens
+  :: Name
+  -- ^ Terminal type name
+  -> String
+  -- ^ Rule name
+  -> TH.Dec
+terminalToLens terminalName nm = TH.InstanceD [] typ decs
+  where
+    name = TH.mkName nm
+    local = mkName "_x"
+    typ = (TH.ConT ''Lens.Wrapped) `TH.AppT` (TH.ConT name)
+    decs = [assocType, wrapper]
+      where
+        assocType = TH.TySynD ''Lens.Unwrapped
+          [TH.PlainTV name] (TH.ConT terminalName)
+        wrapper = TH.FunD 'Lens._Wrapped
+          [TH.Clause [] (TH.NormalB body) []]
+          where
+            body = (TH.VarE 'Lens.iso)
+              `TH.AppE` unwrap
+              `TH.AppE` doWrap
+              where
+                unwrap = TH.LamE [lambPat] (TH.VarE local)
+                  where
+                    lambPat = TH.ConP name [TH.VarP local]
+                doWrap = TH.LamE [lambPat] expn
+                  where
+                    expn = (TH.ConE name)
+                      `TH.AppE` (TH.VarE local)
+                    lambPat = TH.VarP local
+
 ruleToLens
   :: Name
   -- ^ Terminal type name
   -> Rule t
-  -> TH.Q [TH.Dec]
+  -> [TH.Dec]
 ruleToLens terminalName (Rule nm _ ty) = case ty of
-
-  RTerminal _ -> sequence [TH.instanceD (return []) typ decs]
-    where
-      typ = (TH.conT ''Lens.Wrapped) `TH.appT` ruleType
-      decs = [assocType, wrapper]
-        where
-          assocType = TH.tySynD ''Lens.Unwrapped
-            [TH.PlainTV (mkName nm)] (TH.conT terminalName)
-          wrapper = TH.funD 'Lens._Wrapped
-            [TH.clause [] (TH.normalB body) []]
-            where
-              body = (TH.varE 'Lens.iso)
-                `TH.appE` (fmap unwrap (TH.newName "x"))
-                `TH.appE` (fmap doWrap (TH.newName "x"))
-                where
-                  unwrap lambName = TH.LamE [lambPat] (TH.VarE lambName)
-                    where
-                      lambPat = TH.ConP (TH.mkName nm) [TH.VarP lambName]
-                  doWrap = undefined
-{-
-      wrapper = TH.FunD (TH.mkName "_Wrapped") [TH.Clause [] body []]
-        where
-          body = undefined
--}
-
-  where
-    ruleType = TH.conT (mkName nm)
-    local = mkName "_x"
+  RTerminal _ -> [terminalToLens terminalName nm]
 
 
 -- | Creates code for every 'Rule' created in the 'Pinchot'.  The data
