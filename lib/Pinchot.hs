@@ -711,7 +711,7 @@ branchesToLenses nm b1 bs = concat $ makePrism b1 : fmap makePrism bs
                           $ [(0 :: Int) ..]
                         bodyCtor = TH.NormalB . (TH.ConE 'Right `TH.AppE`)
                           $ case rules of
-                          [] -> TH.VarE '()
+                          [] -> TH.TupE []
                           _:[] -> TH.VarE (TH.mkName "_y0")
                           _ -> TH.TupE
                             . fmap (\i -> TH.VarE (TH.mkName $ "_y" ++ show i))

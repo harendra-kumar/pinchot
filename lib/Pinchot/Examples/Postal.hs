@@ -33,8 +33,12 @@ postal = mdo
   space <- terminal "Space" (solo ' ')
   comma <- terminal "Comma" (solo ',')
 
+  letters <- nonTerminal "Letters"
+    [ ("NoLetter", [])
+    , ("ConsLetter", [letter, letters])
+    ]
   -- Named "PostalWord" to avoid clash with Prelude.Word
-  word <- list1 "PostalWord" letter
+  word <- record "PostalWord" [letter, letters]
   preSpacedWord <- nonTerminal "PreSpacedWord"
     [("PreSpacedWord", [space, word])]
   preSpacedWords <- list "PreSpacedWords" preSpacedWord
