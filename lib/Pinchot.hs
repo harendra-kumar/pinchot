@@ -655,7 +655,77 @@ branchesToLenses
   -> [TH.Dec]
 branchesToLenses nm b1 bs = concat $ makePrism b1 : fmap makePrism bs
   where
-    makePrism (Branch inner rules) = undefined
+    makePrism (Branch inner rules) = [ signature, binding ]
+      where
+        prismName = TH.mkName ('_' : inner)
+        signature = TH.SigD prismName
+          $ (TH.ConT ''Lens.Prism')
+          `TH.AppT` (TH.ConT (TH.mkName nm))
+          `TH.AppT` fieldsType
+          where
+            fieldsType = case rules of
+              [] -> TH.TupleT 0
+              Rule r1 _ _ : [] -> TH.ConT (TH.mkName r1)
+              rs -> foldl addType (TH.TupleT (length rs)) rs
+                where
+                  addType soFar (Rule r _ _) = soFar `TH.AppT`
+                    (TH.ConT (TH.mkName r))
+        binding = TH.ValD (TH.VarP prismName) body []
+          where
+            body = TH.NormalB
+              $ (TH.VarE 'Lens.prism)
+              `TH.AppE` setter
+              `TH.AppE` getter
+              where
+                setter = TH.LamE [pat] expn
+                  where
+                    (pat, expn) = case rules of
+                      [] -> (TH.TupP [], TH.ConE (TH.mkName inner))
+                      _ : [] -> (TH.VarP local,
+                        TH.ConE (TH.mkName inner)
+                        `TH.AppE` TH.VarE local)
+                        where
+                          local = TH.mkName "_x"
+                      ls -> (TH.TupP pats, set)
+                        where
+                          pats = fmap (\i -> TH.VarP (mkName ("_x" ++ show i)))
+                            . take (length ls) $ [(0 :: Int) ..]
+                          set = foldl addVar start . take (length ls)
+                            $ [(0 :: Int) ..]
+                            where
+                              addVar acc i = acc `TH.AppE`
+                                (TH.VarE (TH.mkName ("_x" ++ show i)))
+                              start = TH.ConE (TH.mkName inner)
+
+                getter = TH.LamE [pat] expn
+                  where
+                    local = TH.mkName "_x"
+                    pat = TH.VarP local
+                    expn = TH.CaseE (TH.VarE (TH.mkName "_x")) $
+                      TH.Match patCtor bodyCtor []
+                      : rest
+                      where
+                        patCtor = TH.ConP (TH.mkName inner)
+                          . fmap (\i -> TH.VarP (TH.mkName $ "_y" ++ show i))
+                          . take (length rules)
+                          $ [(0 :: Int) ..]
+                        bodyCtor = TH.NormalB . (TH.ConE 'Right `TH.AppE`)
+                          $ case rules of
+                          [] -> TH.VarE '()
+                          _:[] -> TH.VarE (TH.mkName "_y0")
+                          _ -> TH.TupE
+                            . fmap (\i -> TH.VarE (TH.mkName $ "_y" ++ show i))
+                            . take (length rules)
+                            $ [(0 :: Int) ..]
+                        rest = case bs of
+                          [] -> []
+                          _ -> [TH.Match patBlank bodyBlank []]
+                          where
+                            patBlank = TH.VarP (TH.mkName "_z")
+                            bodyBlank = TH.NormalB
+                              $ TH.ConE ('Left)
+                              `TH.AppE` TH.VarE (TH.mkName "_z")
+
 
 recordsToLenses
   :: String
@@ -703,7 +773,7 @@ ruleToLens
   -> [TH.Dec]
 ruleToLens terminalName nm ty = case ty of
   RTerminal _ -> [terminalToLens terminalName nm]
-  RBranch (b1, bs) -> [] -- branchesToLenses nm b1 bs
+  RBranch (b1, bs) -> branchesToLenses nm b1 bs
   RSeqTerm _ -> [terminalSeqToLens terminalName nm]
   ROptional (Rule inner _ _) -> [optionalToLens inner nm]
   RMany (Rule inner _ _) -> [manyToLens inner nm]
