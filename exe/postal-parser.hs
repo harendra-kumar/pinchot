@@ -13,7 +13,7 @@ import Text.Show.Pretty (ppShow)
 
 import Text.Earley (Prod, Grammar, parser, fullParses)
 
-ruleTreeToCode makeOptics ''Char [''Show] postal
+ruleTreeToTypes makeOptics ''Char [''Show] postal
 
 postalGrammar :: Grammar r (Prod r String Char Address)
 postalGrammar = $(earleyGrammar "" postal)

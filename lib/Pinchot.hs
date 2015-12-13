@@ -70,8 +70,8 @@ module Pinchot
   , MakeOptics
   , makeOptics
   , noOptics
-  , allRulesToCode
-  , ruleTreeToCode
+  , allRulesToTypes
+  , ruleTreeToTypes
   ) where
 
 import Pinchot.Intervals
@@ -478,7 +478,7 @@ thRule doLenses typeName derives (Rule nm _ ruleType) = do
   return (ty : lenses)
   where
     lenses
-      | doLenses = ruleToLens typeName nm ruleType
+      | doLenses = ruleToOptics typeName nm ruleType
       | otherwise = []
 
 
@@ -600,75 +600,75 @@ makeWrapped wrappedType nm = TH.InstanceD [] typ decs
                       `TH.AppE` (TH.VarE local)
                     lambPat = TH.VarP local
 
-terminalToLens
+terminalToOptics
   :: Name
   -- ^ Terminal type name
   -> String
   -- ^ Rule name
   -> TH.Dec
-terminalToLens terminalName = makeWrapped term
+terminalToOptics terminalName = makeWrapped term
   where
     term = TH.ConT terminalName
 
-optionalToLens
+optionalToOptics
   :: String
   -- ^ Wrapped rule name
   -> String
   -- ^ Wrapping Rule name
   -> TH.Dec
-optionalToLens wrappedName = makeWrapped maybeName
+optionalToOptics wrappedName = makeWrapped maybeName
   where
     maybeName = (TH.ConT ''Maybe) `TH.AppT` (TH.ConT (TH.mkName wrappedName))
 
-many1ToLens
+many1ToOptics
   :: String
   -- ^ Wrapped rule name
   -> String
   -- ^ Wrapping Rule name
   -> TH.Dec
-many1ToLens wrappedName = makeWrapped tupName
+many1ToOptics wrappedName = makeWrapped tupName
   where
     tupName = (TH.TupleT 2)
       `TH.AppT` (TH.ConT (TH.mkName wrappedName))
       `TH.AppT` ((TH.ConT ''Seq) `TH.AppT` (TH.ConT (TH.mkName wrappedName)))
 
-manyToLens
+manyToOptics
   :: String
   -- ^ Wrapped rule name
   -> String
   -- ^ Wrapping Rule name
   -> TH.Dec
-manyToLens wrappedName = makeWrapped innerName
+manyToOptics wrappedName = makeWrapped innerName
   where
     innerName = (TH.ConT ''Seq) `TH.AppT` (TH.ConT (TH.mkName wrappedName))
 
-wrapToLens
+wrapToOptics
   :: String
   -- ^ Wrapped rule name
   -> String
   -- ^ Wrapping Rule name
   -> TH.Dec
-wrapToLens wrappedName = makeWrapped innerName
+wrapToOptics wrappedName = makeWrapped innerName
   where
     innerName = TH.ConT (TH.mkName wrappedName)
 
-terminalSeqToLens
+terminalSeqToOptics
   :: Name
   -- ^ Terminal type name
   -> String
   -- ^ Rule name
   -> TH.Dec
-terminalSeqToLens terminalName = makeWrapped sqType
+terminalSeqToOptics terminalName = makeWrapped sqType
   where
     sqType = (TH.ConT ''Seq) `TH.AppT` (TH.ConT terminalName)
 
-branchesToLenses
+branchesToOptics
   :: String
   -- ^ Rule name
   -> Branch t
   -> Seq (Branch t)
   -> [TH.Dec]
-branchesToLenses nm b1 bsSeq = concat $ makePrism b1 : toList (fmap makePrism bs)
+branchesToOptics nm b1 bsSeq = concat $ makePrism b1 : toList (fmap makePrism bs)
   where
     bs = toList bsSeq
     makePrism (Branch inner rulesSeq) = [ signature, binding ]
@@ -744,12 +744,12 @@ branchesToLenses nm b1 bsSeq = concat $ makePrism b1 : toList (fmap makePrism bs
                               `TH.AppE` TH.VarE (TH.mkName "_z")
 
 
-recordsToLenses
+recordsToOptics
   :: String
   -- ^ Rule name
   -> Seq (Rule t)
   -> [TH.Dec]
-recordsToLenses nm
+recordsToOptics nm
   = concat . zipWith makeLens [(0 :: Int) ..] . toList
   where
     makeLens index (Rule inner _ _) = [ signature, function ]
@@ -781,22 +781,22 @@ recordsToLenses nm
                       [ (TH.mkName ('_' : fieldNm), TH.VarE namedNewVal) ]
 
 
-ruleToLens
+ruleToOptics
   :: Name
   -- ^ Terminal type name
   -> String
   -- ^ Rule name
   -> RuleType t
   -> [TH.Dec]
-ruleToLens terminalName nm ty = case ty of
-  RTerminal _ -> [terminalToLens terminalName nm]
-  RBranch (b1, bs) -> branchesToLenses nm b1 bs
-  RSeqTerm _ -> [terminalSeqToLens terminalName nm]
-  ROptional (Rule inner _ _) -> [optionalToLens inner nm]
-  RMany (Rule inner _ _) -> [manyToLens inner nm]
-  RMany1 (Rule inner _ _) -> [many1ToLens inner nm]
-  RWrap (Rule inner _ _) -> [wrapToLens inner nm]
-  RRecord recs -> recordsToLenses nm recs
+ruleToOptics terminalName nm ty = case ty of
+  RTerminal _ -> [terminalToOptics terminalName nm]
+  RBranch (b1, bs) -> branchesToOptics nm b1 bs
+  RSeqTerm _ -> [terminalSeqToOptics terminalName nm]
+  ROptional (Rule inner _ _) -> [optionalToOptics inner nm]
+  RMany (Rule inner _ _) -> [manyToOptics inner nm]
+  RMany1 (Rule inner _ _) -> [many1ToOptics inner nm]
+  RWrap (Rule inner _ _) -> [wrapToOptics inner nm]
+  RRecord recs -> recordsToOptics nm recs
 
 -- | Should optics be made?
 type MakeOptics = Bool
@@ -837,14 +837,14 @@ makeOptics = True
 noOptics :: MakeOptics
 noOptics = False
 
--- | Creates code for every 'Rule' created in the 'Pinchot'.  The data
+-- | Creates data types for every 'Rule' created in the 'Pinchot'.  The data
 -- types are created in the same order in which they were created in
 -- the 'Pinchot'.  When spliced, the 'DecsQ' is a list of
 -- declarations, each of which is an appropriate @data@ or @newtype@.
--- For an example use of 'allRulesToCode', see
+-- For an example use of 'allRulesToTypes', see
 -- "Pinchot.Examples.PostalAstAllRules".
 
-allRulesToCode
+allRulesToTypes
 
   :: MakeOptics
 
@@ -860,16 +860,16 @@ allRulesToCode
   -- ^ The return value from the 'Pinchot' is ignored.
 
   -> DecsQ
-allRulesToCode doOptics typeName derives pinchot = case ei of
+allRulesToTypes doOptics typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
   Right _ -> thAllRules doOptics typeName derives (allRules st')
   where
     (ei, st') = runState (runExceptT (runPinchot pinchot))
       (Names Set.empty Set.empty 0 M.empty)
 
--- | Creates code only for the 'Rule' returned from the 'Pinchot', and
+-- | Creates data types only for the 'Rule' returned from the 'Pinchot', and
 -- for its ancestors.
-ruleTreeToCode
+ruleTreeToTypes
   :: MakeOptics
 
   -> Name
@@ -884,7 +884,7 @@ ruleTreeToCode
   -- ^ A data type is created for the 'Rule' that the 'Pinchot'
   -- returns, and for the ancestors of the 'Rule'.
   -> DecsQ
-ruleTreeToCode doOptics typeName derives pinchot = case ei of
+ruleTreeToTypes doOptics typeName derives pinchot = case ei of
   Left err -> fail $ "pinchot: bad grammar: " ++ show err
   Right r -> fmap join . sequence . toList
     . fmap (thRule doOptics typeName derives)
@@ -920,11 +920,10 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
             [| $tree <|> $(branchToParser prefix branch) |]
 
   RSeqTerm sq -> do
-    let nestRule = bindS (varP helper) [|rule $(go sq)|]
+    let nestRule = bindS (varP helper) [| rule $(foldl addTerm start sq) |]
           where
-            go sqnce = case viewl sqnce of
-              EmptyL -> [|pure Seq.empty|]
-              x :< xs -> [|liftA2 (<|) (symbol x) $(go xs)|]
+            start = [|pure Seq.empty|]
+            addTerm acc x = [| liftA2 (<|) (symbol x) $acc |]
     nest <- nestRule
     topRule <- makeRule (wrapper helper)
     return [nest, topRule]
@@ -1049,7 +1048,7 @@ earleyGrammar
 
   => String
   -- ^ Module prefix.  You have to make sure that the data types you
-  -- created with 'ruleTreeToCode' or with 'allRulesToCode' are in
+  -- created with 'ruleTreeToTypes' or with 'allRulesToTypes' are in
   -- scope, either because they were spliced into the same module that
   -- 'earleyParser' is spliced into, or because they are @import@ed
   -- into scope.  The spliced Template Haskell code has to know where
