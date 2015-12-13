@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedLists #-}
 
 -- | Creates a Template Haskell parser.  Parses strings in the postal
 -- language and pretty-prints the result.
