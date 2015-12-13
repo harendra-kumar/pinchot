@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedLists #-}
 
 -- | Provides an example of the use of 'ruleTreeToCode'.  You will
 -- want to look at the source code, as it has a Template Haskell

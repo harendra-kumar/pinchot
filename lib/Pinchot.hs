@@ -123,13 +123,13 @@ type AlternativeName = String
 -- | A branch in a sum rule.  In @Branch s ls@, @s@ is the name of the
 -- data constructor, and @ls@ is the list of rules that this branch
 -- produces.
-data Branch t = Branch String [(Rule t)]
+data Branch t = Branch String (Seq (Rule t))
   deriving (Eq, Ord, Show)
 
 data RuleType t
   = RTerminal (Intervals t)
-  | RBranch (Branch t, [(Branch t)])
-  | RSeqTerm [t] 
+  | RBranch (Branch t, Seq (Branch t))
+  | RSeqTerm (Seq t)
   | ROptional (Rule t)
   | RMany (Rule t)
   | RMany1 (Rule t)
@@ -264,11 +264,11 @@ terminal name ivls = newRule name (RTerminal ivls)
 
 splitNonTerminal
   :: String
-  -> [(String, [(Rule t)])]
-  -> Pinchot t ((String, [(Rule t)]), [(String, [Rule t])])
-splitNonTerminal n sq = Pinchot $ case sq of
-  [] -> throwE $ EmptyNonTerminal n
-  x : xs -> return (x, xs)
+  -> Seq (String, Seq (Rule t))
+  -> Pinchot t ((String, Seq (Rule t)), Seq (String, Seq (Rule t)))
+splitNonTerminal n sq = Pinchot $ case viewl sq of
+  EmptyL -> throwE $ EmptyNonTerminal n
+  x :< xs -> return (x, xs)
 
 -- | Creates a production for a sequence of terminals.  Useful for
 -- parsing specific words.
@@ -276,7 +276,7 @@ terminalSeq
 
   :: RuleName
 
-  -> [t]
+  -> Seq t
   -- ^ Sequence of terminal symbols to recognize
 
   -> Pinchot t (Rule t)
@@ -288,7 +288,7 @@ nonTerminal
 
   :: RuleName
 
-  -> [(AlternativeName, [Rule t])]
+  -> Seq (AlternativeName, Seq (Rule t))
   -- ^ Alternatives.  There must be at least one alternative;
   -- otherwise, an error will result.  In each pair @(a, b)@, @a@ will
   -- be the data constructor, so this must be a valid Haskell data
@@ -307,7 +307,7 @@ ruleConstructorNames
   -> Seq AlternativeName
 ruleConstructorNames (Rule n _ t) = case t of
   RTerminal _ -> Seq.singleton n
-  RBranch (b1, bs) -> branchName b1 <| Seq.fromList (fmap branchName bs)
+  RBranch (b1, bs) -> branchName b1 <| fmap branchName bs
     where
       branchName (Branch x _) = x
   RSeqTerm _ -> Seq.singleton n
@@ -324,9 +324,9 @@ addDataConNames = mapM_ addDataConName . ruleConstructorNames
 -- each alternative produces only one rule.
 union
   :: RuleName
-  -> [(AlternativeName, Rule t)]
+  -> Seq (AlternativeName, Rule t)
   -> Pinchot t (Rule t)
-union name = nonTerminal name . fmap (\(n, r) -> (n, [r]))
+union name = nonTerminal name . fmap (\(n, r) -> (n, Seq.singleton r))
 
 -- | Creates a new non-terminal production rule with only one
 -- alternative where each field has a record name.  The name of each
@@ -393,42 +393,42 @@ wrap name r = newRule name (RWrap r)
 -- | Gets all ancestor 'Rule's.  Skips duplicates.
 getAncestors
   :: Rule t
-  -> State (Set String) [Rule t]
+  -> State (Set String) (Seq (Rule t))
 getAncestors r@(Rule name _ ei) = do
   set <- get
   if Set.member name set
-    then return []
+    then return Seq.empty
     else do
       put (Set.insert name set)
       case ei of
-        RTerminal _ -> return [r]
+        RTerminal _ -> return (Seq.singleton r)
         RBranch (b1, bs) -> do
           as1 <- branchAncestors b1
           ass <- fmap join . mapM branchAncestors $ bs
-          return $ r : as1 <> ass
-        RSeqTerm _ -> return [r]
+          return $ r <| as1 <> ass
+        RSeqTerm _ -> return (Seq.singleton r)
         ROptional c -> do
           cs <- getAncestors c
-          return $ r : cs
+          return $ r <| cs
         RMany c -> do
           cs <- getAncestors c
-          return $ r : cs
+          return $ r <| cs
         RMany1 c -> do
           cs <- getAncestors c
-          return $ r : cs
+          return $ r <| cs
         RWrap c -> do
           cs <- getAncestors c
-          return $ r : cs
+          return $ r <| cs
         RRecord ls -> do
-          cs <- fmap join . mapM getAncestors . toList $ ls
-          return $ r : cs
+          cs <- fmap join . mapM getAncestors $ ls
+          return $ r <| cs
   where
     branchAncestors (Branch _ rs) = fmap join . mapM getAncestors $ rs
 
 -- | Returns both this 'Rule' and any 'Rule's that are ancestors.
 ruleAndAncestors
   :: Rule t
-  -> [Rule t]
+  -> Seq (Rule t)
 ruleAndAncestors r = fst $ runState (getAncestors r) Set.empty
 
 -- | Given a sequence of 'Rule', determine which rules are on a
@@ -469,7 +469,7 @@ thRule
   -- ^ If True, make lenses.
   -> Name
   -- ^ Name of terminal type
-  -> [Name]
+  -> Seq Name
   -- ^ What to derive
   -> Rule t
   -> TH.Q [TH.Dec]
@@ -485,13 +485,13 @@ thRule doLenses typeName derives (Rule nm _ ruleType) = do
 makeType
   :: Name
   -- ^ Name of terminal type
-  -> [Name]
+  -> Seq Name
   -- ^ What to derive
   -> String
   -- ^ Name of rule
   -> RuleType t
   -> TH.Q TH.Dec
-makeType typeName derives nm ruleType = case ruleType of
+makeType typeName derivesSeq nm ruleType = case ruleType of
   RTerminal _ -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
@@ -540,6 +540,7 @@ makeType typeName derives nm ruleType = case ruleType of
 
   where
     name = mkName nm
+    derives = toList derivesSeq
 
 -- | Field name - without a leading underscore
 fieldName
@@ -557,7 +558,7 @@ thAllRules
   -- ^ If True, make optics as well.
   -> Name
   -- ^ Terminal type constructor name
-  -> [Name]
+  -> Seq Name
   -- ^ What to derive
   -> Map Int (Rule t)
   -> DecsQ
@@ -665,12 +666,14 @@ branchesToLenses
   :: String
   -- ^ Rule name
   -> Branch t
-  -> [Branch t]
+  -> Seq (Branch t)
   -> [TH.Dec]
-branchesToLenses nm b1 bs = concat $ makePrism b1 : fmap makePrism bs
+branchesToLenses nm b1 bsSeq = concat $ makePrism b1 : toList (fmap makePrism bs)
   where
-    makePrism (Branch inner rules) = [ signature, binding ]
+    bs = toList bsSeq
+    makePrism (Branch inner rulesSeq) = [ signature, binding ]
       where
+        rules = toList rulesSeq
         prismName = TH.mkName ('_' : inner)
         signature = TH.SigD prismName
           $ (TH.ConT ''Lens.Prism')
@@ -849,7 +852,7 @@ allRulesToCode
   -- ^ Terminal type constructor name.  Typically you will use the
   -- Template Haskell quoting mechanism to get this.
 
-  -> [Name]
+  -> Seq Name
   -- ^ What to derive.  For instance, you might use @Eq@, @Ord@, and
   -- @Show@ here.  Each created data type will derive these instances.
 
@@ -873,7 +876,7 @@ ruleTreeToCode
   -- ^ Terminal type constructor name.  Typically you will use the
   -- Template Haskell quoting mechanism to get this.
 
-  -> [Name]
+  -> Seq Name
   -- ^ What to derive.  For instance, you might use @Eq@, @Ord@, and
   -- @Show@ here.  Each created data type will derive these instances.
 
@@ -919,9 +922,9 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
   RSeqTerm sq -> do
     let nestRule = bindS (varP helper) [|rule $(go sq)|]
           where
-            go sqnce = case sqnce of
-              [] -> [|pure Seq.empty|]
-              x : xs -> [|liftA2 (<|) (symbol x) $(go xs)|]
+            go sqnce = case viewl sqnce of
+              EmptyL -> [|pure Seq.empty|]
+              x :< xs -> [|liftA2 (<|) (symbol x) $(go xs)|]
     nest <- nestRule
     topRule <- makeRule (wrapper helper)
     return [nest, topRule]
@@ -1006,9 +1009,9 @@ branchToParser
   -- ^ Module prefix
   -> Branch t
   -> ExpQ
-branchToParser prefix (Branch name rules) = case rules of
-  [] -> [| pure $constructor |]
-  (Rule rule1 _ _) : xs -> foldl f z xs
+branchToParser prefix (Branch name rules) = case viewl rules of
+  EmptyL -> [| pure $constructor |]
+  (Rule rule1 _ _) :< xs -> foldl f z xs
     where
       z = [| $constructor <$> $(varE (ruleName rule1)) |]
       f soFar (Rule rule2 _ _) = [| $soFar <*> $(varE (ruleName rule2)) |]

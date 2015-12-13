@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedLists #-}
 -- | Provides an example of 'ruleTreeToCode', but unlike
 -- "Pinchot.Examples.PostalAstAllRules", does not make optics.
 

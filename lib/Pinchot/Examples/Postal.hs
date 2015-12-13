@@ -23,20 +23,23 @@ postal = mdo
   direction <- nonTerminal "Direction"
     [ ("DNorth", [north]), ("DSouth", [south]), ("DEast", [east])
     , ("DWest", [west])]
-  street <- terminalSeq "Street" "St"
-  avenue <- terminalSeq "Avenue" "Ave"
-  way <- terminalSeq "Way" "Way"
-  boulevard <- terminalSeq "Boulevard" "Blvd"
+  street <- terminalSeq "Street" ['S', 't']
+  avenue <- terminalSeq "Avenue" ['A', 'v', 'e']
+  way <- terminalSeq "Way" ['W', 'a', 'y']
+  boulevard <- terminalSeq "Boulevard" ['B', 'l', 'v', 'd']
   suffix <- nonTerminal "Suffix"
     [ ("SStreet", [street]), ("SAvenue", [avenue]), ("SWay", [way])
     , ("SBoulevard", [boulevard])]
   space <- terminal "Space" (solo ' ')
   comma <- terminal "Comma" (solo ',')
 
+  -- You could do this with 'many' but this demonstrates how to write
+  -- a recurvsive rule.
   letters <- nonTerminal "Letters"
     [ ("NoLetter", [])
     , ("ConsLetter", [letter, letters])
     ]
+
   -- Named "PostalWord" to avoid clash with Prelude.Word
   word <- record "PostalWord" [letter, letters]
   preSpacedWord <- nonTerminal "PreSpacedWord"
