@@ -58,6 +58,6 @@ postal = mdo
   optSuffix <- option "MaybeSuffix" spaceSuffix
   address <- record "Address"
     [ number, space, optDirection, streetName, optSuffix,
-      comma, space, city, state, zipCode
+      comma, space, city, comma, space, state, space, zipCode
     ]
   return address

@@ -329,10 +329,24 @@ union
 union name = nonTerminal name . fmap (\(n, r) -> (n, [r]))
 
 -- | Creates a new non-terminal production rule with only one
--- alternative where each field has a record name.
+-- alternative where each field has a record name.  The name of each
+-- record is:
+--
+-- @_f\'RULE_NAME\'INDEX\'FIELD_TYPE@
+--
+-- where RULE_NAME is the name of this rule, INDEX is the index number
+-- for this field (starting with 0), and FIELD_TYPE is the type of the
+-- field itself.  For an example, see
+-- 'Pinchot.Examples.PostalAstAllRules.Address'.
+--
+-- Currently there is no way to change the names of the record fields.
 record
   :: RuleName
+  -- ^ The name of this rule, which is used both as the type name and
+  -- the name of the sole data constructor.
   -> Seq (Rule t)
+  -- ^ The right-hand side of this rule.  This sequence can be empty,
+  -- which results in an epsilon production.
   -> Pinchot t (Rule t)
 record name sq = newRule name (RRecord sq)
 

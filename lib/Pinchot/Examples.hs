@@ -9,9 +9,9 @@
 -- addresses.
 --
 -- "Pinchot.Examples.PostalAstAllRules" shows you how to use
--- 'allRulesToCode' and 'earleyParser', while
+-- 'allRulesToCode' and 'earleyGrammar', while
 -- "Pinchot.Examples.PostalAstRuleTree" shows you how to use
--- 'ruleTreeToCode' and 'earleyParser'.
+-- 'ruleTreeToCode' and 'earleyGrammar'.
 --
 -- Two executables are included in the @pinchot@ package.  To get
 -- them, compile @pinchot@ with the @executables@ Cabal flag.  The
