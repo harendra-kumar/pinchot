@@ -1,5 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 -- | Pinchot internals.  Ordinarily the "Pinchot" module should have
 -- everything you need.
 
@@ -62,8 +63,8 @@ data RuleType t
   | RBranch (Branch t, Seq (Branch t))
   | RSeqTerm (Seq t)
   | ROptional (Rule t)
-  | RMany (Rule t)
-  | RMany1 (Rule t)
+  | RList (Rule t)
+  | RList1 (Rule t)
   | RWrap (Rule t)
   | RRecord (Seq (Rule t))
   deriving (Eq, Ord, Show)
@@ -243,8 +244,8 @@ ruleConstructorNames (Rule n _ t) = case t of
       branchName (Branch x _) = x
   RSeqTerm _ -> Seq.singleton n
   ROptional _ -> Seq.singleton n
-  RMany _ -> Seq.singleton n
-  RMany1 _ -> Seq.singleton n
+  RList _ -> Seq.singleton n
+  RList1 _ -> Seq.singleton n
   RWrap _ -> Seq.singleton n
   RRecord _ -> Seq.singleton n
 
@@ -291,7 +292,7 @@ list
   -- 'Rule'; that is, this 'Rule' may appear zero or more times.
 
   -> Pinchot t (Rule t)
-list name r = newRule name (RMany r)
+list name r = newRule name (RList r)
 
 -- | Creates a rule for a production that appears at least once.
 list1
@@ -299,7 +300,7 @@ list1
   -> Rule t
   -- ^ The resulting 'Rule' produces this 'Rule' at least once.
   -> Pinchot t (Rule t)
-list1 name r = newRule name (RMany1 r)
+list1 name r = newRule name (RList1 r)
 
 -- | Creates a rule for a production that optionally produces another
 -- rule.
@@ -341,10 +342,10 @@ getAncestors r@(Rule name _ ei) = do
         ROptional c -> do
           cs <- getAncestors c
           return $ r <| cs
-        RMany c -> do
+        RList c -> do
           cs <- getAncestors c
           return $ r <| cs
-        RMany1 c -> do
+        RList1 c -> do
           cs <- getAncestors c
           return $ r <| cs
         RWrap c -> do
@@ -377,8 +378,8 @@ rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Set.empty)
               checkBranch (Branch _ rls) rslts = foldr checkRule rslts rls
           RSeqTerm _ -> results
           ROptional r -> checkRule r results
-          RMany r -> addHelper $ checkRule r results
-          RMany1 r -> addHelper $ checkRule r results
+          RList r -> addHelper $ checkRule r results
+          RList1 r -> addHelper $ checkRule r results
           RWrap r -> checkRule r results
           RRecord sq -> foldr checkRule results $ sq
         checkRule (Rule name _ _) rslts
@@ -396,7 +397,8 @@ thBranch (Branch nm rules) = normalC name fields
 
 
 thRule
-  :: Bool
+  :: Syntax.Lift t
+  => Bool
   -- ^ If True, make lenses.
   -> Name
   -- ^ Name of terminal type
@@ -406,11 +408,9 @@ thRule
   -> TH.Q [TH.Dec]
 thRule doLenses typeName derives (Rule nm _ ruleType) = do
   ty <- makeType typeName derives nm ruleType
-  return (ty : lenses)
-  where
-    lenses
-      | doLenses = ruleToOptics typeName nm ruleType
-      | otherwise = []
+  lenses <- if doLenses then ruleToOptics typeName nm ruleType
+    else return []
+  return (ty : productionInstance typeName nm ruleType : lenses)
 
 
 makeType
@@ -444,13 +444,13 @@ makeType typeName derivesSeq nm ruleType = case ruleType of
         [strictType notStrict (appT [t| Maybe |]
                                     (conT (mkName inner)))]
 
-  RMany (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
+  RList (Rule inner _ _) -> newtypeD (cxt []) name [] newtypeCon derives
     where
       newtypeCon = normalC name
         [strictType notStrict (appT [t| Seq |]
                                     (conT (mkName inner)))]
 
-  RMany1 (Rule inner _ _) -> newtypeD (cxt []) name [] cons derives
+  RList1 (Rule inner _ _) -> newtypeD (cxt []) name [] cons derives
     where
       cons = normalC name
         [ strictType notStrict (TH.tupleT 2 `appT` (conT (mkName inner))
@@ -485,7 +485,8 @@ fieldName
 fieldName idx par inn = "f'" ++ par ++ "'" ++ show idx ++ "'" ++ inn
 
 thAllRules
-  :: Bool
+  :: Syntax.Lift t
+  => Bool
   -- ^ If True, make optics as well.
   -> Name
   -- ^ Terminal type constructor name
@@ -531,15 +532,58 @@ makeWrapped wrappedType nm = TH.InstanceD [] typ decs
                       `TH.AppE` (TH.VarE local)
                     lambPat = TH.VarP local
 
-terminalToOptics
-  :: Name
+seqTermToOptics
+  :: Syntax.Lift t
+  => Name
   -- ^ Terminal type name
   -> String
   -- ^ Rule name
-  -> TH.Dec
-terminalToOptics terminalName = makeWrapped term
+  -> Seq t
+  -> TH.Q [TH.Dec]
+seqTermToOptics termName nm sq = do
+  e1 <- TH.sigD (TH.mkName ('_':nm)) (TH.conT ''Lens.Prism'
+    `TH.appT` (TH.conT ''Seq `TH.appT` TH.conT termName)
+    `TH.appT` TH.conT (TH.mkName nm))
+  e2 <- TH.valD prismName (TH.normalB expn) []
+  return [e1, e2]
   where
-    term = TH.ConT terminalName
+    prismName = TH.varP (TH.mkName ('_' : nm))
+    fetchPat = TH.conP (TH.mkName nm) [TH.varP (TH.mkName "_x")]
+    fetchName = TH.varE (TH.mkName "_x")
+    ctor = TH.conE (TH.mkName nm)
+    expn = [| let fetch $fetchPat = $fetchName
+                  store _term
+                    | $(liftSeq sq) == _term = Right ($ctor _term)
+                    | otherwise = Left _term
+              in Lens.prism fetch store
+           |]
+
+terminalToOptics
+  :: Syntax.Lift t
+  => Name
+  -- ^ Terminal type name
+  -> String
+  -- ^ Rule name
+  -> Intervals t
+  -> TH.Q [TH.Dec]
+terminalToOptics termName nm ivls = do
+  e1 <- TH.sigD (TH.mkName ('_':nm)) (TH.conT ''Lens.Prism'
+        `TH.appT` TH.conT termName
+        `TH.appT` TH.conT (TH.mkName nm))
+  e2 <- TH.valD prismName (TH.normalB expn) []
+  return [e1, e2]
+  where
+    prismName = TH.varP (TH.mkName ('_' : nm))
+    fetchPat = TH.conP (TH.mkName nm) [TH.varP (TH.mkName "_x")]
+    fetchName = TH.varE (TH.mkName "_x")
+    ctor = TH.conE (TH.mkName nm)
+    expn = [| let fetch $fetchPat = $fetchName
+                  store _term
+                    | inIntervals ivls _term = Right ($ctor _term)
+                    | otherwise = Left _term
+              in Lens.prism fetch store
+           |]
+    
 
 optionalToOptics
   :: String
@@ -713,40 +757,54 @@ recordsToOptics nm
 
 
 ruleToOptics
-  :: Name
+  :: Syntax.Lift t
+  => Name
   -- ^ Terminal type name
   -> String
   -- ^ Rule name
   -> RuleType t
-  -> [TH.Dec]
+  -> TH.DecsQ
 ruleToOptics terminalName nm ty = case ty of
-  RTerminal _ -> [terminalToOptics terminalName nm]
-  RBranch (b1, bs) -> branchesToOptics nm b1 bs
-  RSeqTerm _ -> [terminalSeqToOptics terminalName nm]
-  ROptional (Rule inner _ _) -> [optionalToOptics inner nm]
-  RMany (Rule inner _ _) -> [manyToOptics inner nm]
-  RMany1 (Rule inner _ _) -> [many1ToOptics inner nm]
-  RWrap (Rule inner _ _) -> [wrapToOptics inner nm]
-  RRecord recs -> recordsToOptics nm recs
+  RTerminal ivl -> terminalToOptics terminalName nm ivl
+  RBranch (b1, bs) -> return $ branchesToOptics nm b1 bs
+  RSeqTerm sq -> seqTermToOptics terminalName nm sq
+  ROptional (Rule inner _ _) -> return [optionalToOptics inner nm]
+  RList (Rule inner _ _) -> return [manyToOptics inner nm]
+  RList1 (Rule inner _ _) -> return [many1ToOptics inner nm]
+  RWrap (Rule inner _ _) -> return [wrapToOptics inner nm]
+  RRecord recs -> return $ recordsToOptics nm recs
 
 -- | Should optics be made?
 type MakeOptics = Bool
 
--- | Creates optics.  If you use this option you will need to have a
---
--- {-\# LANGUAGE TypeFamilies \#-}
+-- | Creates optics.
 --
 -- pragma at the top of the module in which you splice this in.
 --
 -- Creates the listed optics for each kind of
 -- 'Rule', as follows:
 --
--- * 'terminal': 'Lens.Wrapped', wrapping the type of the terminal.
+-- * 'terminal': @'Lens.Prism'' a b@, where @a@ is the type of the
+-- terminal token (often 'Char') and @b@ is the type of this
+-- particular production.  For an example, see
+-- 'Pinchot.Examples.PostalAstAllRules._Comma'.
 --
--- * 'terminalSeq': 'Lens.Wrapped', wrapping a @'Seq' a@, where @a@ is
--- the type of the terminal.
+-- >>> ',' ^? _Comma
+-- Just (Comma ',')
+-- >>> 'a' ^? _Comma
+-- Nothing
+-- >>> Comma ',' ^. re _Comma
+-- ','
 --
--- * 'nonTerminal': one 'Lens.Prism' for each data constructor (even if
+-- Thus this gives you a safe way to insert tokens into types made
+-- with 'terminal' (useful if you want to construct a syntax tree.)
+--
+-- * 'terminalSeq': @'Lens.Prism'' ('Seq' a) b@, where @a@ is the type
+-- of the terminal token (often 'Char') and @b@ is the type of this
+-- particular production.  As with 'terminal' this gives you a safe
+-- way to insert values into the types made with 'terminalSeq'.
+--
+-- * 'nonTerminal': one 'Lens.Prism'' for each data constructor (even if
 -- there is only one data constructor)
 --
 -- * 'union': one 'Lens.Prism' for each data constructor (even if
@@ -776,8 +834,8 @@ noOptics = False
 -- "Pinchot.Examples.PostalAstAllRules".
 
 allRulesToTypes
-
-  :: MakeOptics
+  :: Syntax.Lift t
+  => MakeOptics
 
   -> Name
   -- ^ Terminal type constructor name.  Typically you will use the
@@ -801,7 +859,8 @@ allRulesToTypes doOptics typeName derives pinchot = case ei of
 -- | Creates data types only for the 'Rule' returned from the 'Pinchot', and
 -- for its ancestors.
 ruleTreeToTypes
-  :: MakeOptics
+  :: Syntax.Lift t
+  => MakeOptics
 
   -> Name
   -- ^ Terminal type constructor name.  Typically you will use the
@@ -865,7 +924,7 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
         where
           just = [| fmap Just $(varE (ruleName innerNm)) |]
 
-  RMany (Rule innerNm _ _) -> do
+  RList (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) ([|rule|] `appE` parseSeq)
           where
             parseSeq = uInfixE [|pure Seq.empty|] [|(<|>)|] pSeq
@@ -875,7 +934,7 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
     top <- makeRule $ wrapper helper
     return [nest, top]
 
-  RMany1 (Rule innerNm _ _) -> do
+  RList1 (Rule innerNm _ _) -> do
     let nestRule = bindS (varP helper) [|rule $(parseSeq)|]
           where
             parseSeq = [| pure Seq.empty <|> $pSeq |]
@@ -1021,3 +1080,114 @@ earleyGrammar prefix pinc = case ei of
   where
     (ei, _) = runState (runExceptT (runPinchot pinc))
       (Names Set.empty Set.empty 0 M.empty)
+
+-- | Typeclass for all productions, which allows you to extract a
+-- sequence of terminal symbols from any production.
+
+class Production a where
+  type Terminal a :: *
+  terminals :: a -> Seq (Terminal a)
+
+-- | Creates a 'Production' instance for a 'Rule'.
+
+productionInstance
+  :: Name
+  -- ^ Terminal type
+  -> String
+  -- ^ Rule name
+  -> RuleType t
+  -> TH.Dec
+productionInstance term n t = TH.InstanceD [] ty ds
+  where
+    ty = TH.ConT ''Production `TH.AppT` (TH.ConT (TH.mkName n))
+    ds = [syn, TH.FunD 'terminals clauses]
+      where
+        syn = TH.TySynInstD ''Terminal
+          $ TH.TySynEqn [TH.ConT (TH.mkName n)] (TH.ConT term)
+        clauses = case t of
+          RTerminal _ -> [TH.Clause [pat] bdy []]
+            where
+              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")]
+              bdy = TH.NormalB (TH.VarE 'Seq.singleton
+                `TH.AppE` TH.VarE (TH.mkName "_x"))
+          RBranch (b1, bs) -> branchToClause b1
+            : fmap branchToClause (toList bs)
+
+          RSeqTerm _ -> [TH.Clause [pat] bdy []]
+            where
+              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")]
+              bdy = TH.NormalB (TH.VarE (TH.mkName "_x"))
+
+          ROptional _ -> [justClause, nothingClause]
+            where
+              justClause
+                = TH.Clause [TH.ConP (TH.mkName n)
+                    [TH.ConP 'Just [TH.VarP (TH.mkName "_x")]]]
+                    (TH.NormalB (TH.VarE 'terminals
+                                  `TH.AppE` (TH.VarE (TH.mkName "_x"))))
+                    []
+              nothingClause
+                = TH.Clause [TH.ConP (TH.mkName n)
+                    [TH.ConP 'Nothing []]]
+                    (TH.NormalB (TH.VarE 'Seq.empty)) []
+
+          RList _ -> [TH.Clause [pat] bdy []]
+            where
+              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")] 
+              bdy = (TH.NormalB (TH.VarE 'join
+                  `TH.AppE` ((TH.VarE 'fmap) `TH.AppE` (TH.VarE 'terminals)
+                    `TH.AppE` (TH.VarE (TH.mkName "_x")))))
+
+          RList1 _ -> [TH.Clause [pat] bdy []]
+            where
+              pat = TH.ConP (TH.mkName n)
+                [TH.TupP [ TH.VarP (TH.mkName "_x1")
+                         , TH.VarP (TH.mkName "_xs")]]
+              bdy = TH.NormalB (TH.UInfixE lft mpnd rst)
+                where
+                  lft = TH.VarE 'terminals `TH.AppE` TH.VarE (TH.mkName "_x1")
+                  mpnd = TH.VarE 'mappend
+                  rst = TH.VarE 'join `TH.AppE` nested
+                    where
+                      nested = TH.VarE 'fmap `TH.AppE` TH.VarE 'terminals
+                        `TH.AppE` TH.VarE (TH.mkName "_xs")
+
+          RWrap _ -> [TH.Clause [pat] bdy []]
+            where
+              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")]
+              bdy = TH.NormalB (TH.VarE 'terminals `TH.AppE`
+                TH.VarE (TH.mkName "_x"))
+
+          RRecord sq -> [TH.Clause [pat] (TH.NormalB bdy) []]
+            where
+              pat = TH.ConP (TH.mkName n) . fmap mkPat
+                . take (Seq.length sq) $ [0 :: Int ..]
+                where
+                  mkPat idx = TH.VarP (TH.mkName ("_x" ++ show idx))
+              bdy = foldr addField (TH.VarE 'Seq.empty)
+                . take (Seq.length sq) $ [0 :: Int ..]
+                where
+                  addField idx acc = TH.UInfixE this cons acc
+                    where
+                      this = TH.VarE 'terminals `TH.AppE` TH.VarE
+                        (TH.mkName ("_x" ++ show idx))
+                      cons = TH.VarE 'mappend
+
+branchToClause :: Branch t -> TH.Clause
+branchToClause (Branch n rs) = TH.Clause [pat] bdy []
+  where
+    pat = TH.ConP (TH.mkName n) fields
+      where
+        fields = fmap mkField . take (Seq.length rs) $ [0 :: Int ..]
+          where
+            mkField idx = TH.VarP (TH.mkName ("_x" ++ show idx))
+    bdy = TH.NormalB (TH.VarE 'join `TH.AppE` sq)
+      where
+        sq = foldr addField (TH.VarE 'Seq.empty)
+          . take (Seq.length rs) $ [0 :: Int ..]
+          where
+            addField idx acc = TH.UInfixE newTerm cons acc
+              where
+                newTerm = (TH.VarE 'terminals)
+                  `TH.AppE` (TH.VarE (TH.mkName ("_x" ++ show idx)))
+                cons = TH.VarE '(<|)

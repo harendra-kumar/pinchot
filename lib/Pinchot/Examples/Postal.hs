@@ -33,7 +33,7 @@ postal = mdo
   space <- terminal "Space" (solo ' ')
   comma <- terminal "Comma" (solo ',')
 
-  -- You could do this with 'many' but this demonstrates how to write
+  -- You could do this with 'list' but this demonstrates how to write
   -- a recurvsive rule.
   letters <- nonTerminal "Letters"
     [ ("NoLetter", [])

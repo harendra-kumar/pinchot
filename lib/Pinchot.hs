@@ -8,6 +8,15 @@ types that correspond to your context-free grammar.  You can also use
 Template Haskell to create an Earley parser that will parse all
 strings in the context-free language.
 
+You will need to have
+
+@
+\{\-\# LANGUAGE TypeFamilies \#\-\}
+@
+
+at the top of any module in which you use Template Haskell to splice in
+the resulting data types.
+
 For examples, please consult "Pinchot.Examples".
 
 You should also look at the BNF Converter.
@@ -69,6 +78,9 @@ module Pinchot
   , noOptics
   , allRulesToTypes
   , ruleTreeToTypes
+
+  -- * Manipulating productions
+  , Production(..)
   ) where
 
 import Pinchot.Internal
