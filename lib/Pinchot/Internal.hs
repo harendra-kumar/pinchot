@@ -29,7 +29,7 @@ import Data.Typeable (Typeable)
 import Language.Haskell.TH
   (ExpQ, ConQ, normalC, mkName, strictType, notStrict, newtypeD,
    cxt, conT, Name, dataD, appT, DecsQ, appE, Q, Stmt(NoBindS), uInfixE, bindS,
-   varE, varP, conE, Pat, Exp(AppE, DoE), lamE, recC, varStrictType)
+   varE, varP, conE, Pat, Exp(AppE, DoE), lamE, recC, varStrictType, dyn)
 import qualified Language.Haskell.TH as TH
 import qualified Language.Haskell.TH.Syntax as Syntax
 import Text.Earley (satisfy, rule, symbol)
@@ -439,7 +439,8 @@ thRule doLenses typeName derives (Rule nm _ ruleType) = do
   ty <- makeType typeName derives nm ruleType
   lenses <- if doLenses then ruleToOptics typeName nm ruleType
     else return []
-  return (ty : productionInstance typeName nm ruleType : lenses)
+  inst <- productionInstance typeName nm ruleType
+  return (ty : inst : lenses)
 
 
 makeType
@@ -564,6 +565,10 @@ makeWrapped wrappedType nm = TH.InstanceD [] typ decs
                     expn = (TH.ConE name)
                       `TH.AppE` (TH.VarE local)
                     lambPat = TH.VarP local
+
+-- | TH helper like 'dyn' but for patterns
+dynP :: String -> TH.PatQ
+dynP = TH.varP . TH.mkName
 
 seqTermToOptics
   :: Syntax.Lift t
@@ -1162,105 +1167,103 @@ class Production a where
   terminals :: a -> Seq (Terminal a)
 
 -- | Creates a 'Production' instance for a 'Rule'.
-
 productionInstance
   :: Name
   -- ^ Terminal type
   -> String
   -- ^ Rule name
   -> RuleType t
-  -> TH.Dec
-productionInstance term n t = TH.InstanceD [] ty ds
+  -> TH.DecQ
+productionInstance term n t = TH.instanceD (return []) ty ds
   where
-    ty = TH.ConT ''Production `TH.AppT` (TH.ConT (TH.mkName n))
-    ds = [syn, TH.FunD 'terminals clauses]
+    ty = [t| Production $(TH.conT (TH.mkName n)) |]
+    ds = [syn, TH.funD 'terminals clauses]
       where
-        syn = TH.TySynInstD ''Terminal
-          $ TH.TySynEqn [TH.ConT (TH.mkName n)] (TH.ConT term)
+        syn = TH.tySynInstD ''Terminal
+          $ TH.tySynEqn [ TH.conT (TH.mkName n) ] (TH.conT term)
         clauses = case t of
-          RTerminal _ -> [TH.Clause [pat] bdy []]
+          RTerminal _ -> [TH.clause [pat] bdy []]
             where
-              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")]
-              bdy = TH.NormalB (TH.VarE 'Seq.singleton
-                `TH.AppE` TH.VarE (TH.mkName "_x"))
+              pat = TH.conP (TH.mkName n) [TH.varP (TH.mkName "_x")]
+              bdy = TH.normalB [| Seq.singleton $(TH.varE (TH.mkName "_x")) |]
+
           RBranch (b1, bs) -> branchToClause b1
             : fmap branchToClause (toList bs)
 
-          RSeqTerm _ -> [TH.Clause [pat] bdy []]
+          RSeqTerm _ -> [TH.clause [pat] bdy []]
             where
-              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")]
-              bdy = TH.NormalB (TH.VarE (TH.mkName "_x"))
+              pat = TH.conP (TH.mkName n) [TH.varP (TH.mkName "_x")]
+              bdy = TH.normalB (dyn "_x")
 
           ROptional _ -> [justClause, nothingClause]
             where
               justClause
-                = TH.Clause [TH.ConP (TH.mkName n)
-                    [TH.ConP 'Just [TH.VarP (TH.mkName "_x")]]]
-                    (TH.NormalB (TH.VarE 'terminals
-                                  `TH.AppE` (TH.VarE (TH.mkName "_x"))))
+                = TH.clause [TH.conP (TH.mkName n)
+                    [TH.conP 'Just [TH.varP (TH.mkName "_x")]]]
+                    (TH.normalB [| terminals $(TH.varE (TH.mkName "_x")) |])
                     []
               nothingClause
-                = TH.Clause [TH.ConP (TH.mkName n)
-                    [TH.ConP 'Nothing []]]
-                    (TH.NormalB (TH.VarE 'Seq.empty)) []
+                = TH.clause [TH.conP (TH.mkName n)
+                    [TH.conP 'Nothing []]]
+                    (TH.normalB [| Seq.empty |]) []
 
-          RList _ -> [TH.Clause [pat] bdy []]
+          RList _ -> [TH.clause [pat] bdy []]
             where
-              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")] 
-              bdy = (TH.NormalB (TH.VarE 'join
-                  `TH.AppE` ((TH.VarE 'fmap) `TH.AppE` (TH.VarE 'terminals)
-                    `TH.AppE` (TH.VarE (TH.mkName "_x")))))
+              pat = TH.conP (TH.mkName n) [TH.varP (TH.mkName "_x")] 
+              bdy = TH.normalB [| join
+                $ fmap terminals $(TH.varE (TH.mkName "_x")) |]
 
-          RList1 _ -> [TH.Clause [pat] bdy []]
+          RList1 _ -> [TH.clause [pat] bdy []]
             where
-              pat = TH.ConP (TH.mkName n)
-                [TH.TupP [ TH.VarP (TH.mkName "_x1")
-                         , TH.VarP (TH.mkName "_xs")]]
-              bdy = TH.NormalB (TH.UInfixE lft mpnd rst)
+              pat = TH.conP (TH.mkName n)
+                [TH.tupP [ dynP "_x1", dynP "_xs" ]]
+              bdy = TH.normalB
+                [| $lft `mappend` (join (fmap terminals
+                    $(dyn "_xs"))) |]
                 where
-                  lft = TH.VarE 'terminals `TH.AppE` TH.VarE (TH.mkName "_x1")
-                  mpnd = TH.VarE 'mappend
-                  rst = TH.VarE 'join `TH.AppE` nested
-                    where
-                      nested = TH.VarE 'fmap `TH.AppE` TH.VarE 'terminals
-                        `TH.AppE` TH.VarE (TH.mkName "_xs")
+                  lft = [| terminals $(dyn "_x1") |]
 
-          RWrap _ -> [TH.Clause [pat] bdy []]
+          RWrap _ -> [TH.clause [pat] bdy []]
             where
-              pat = TH.ConP (TH.mkName n) [TH.VarP (TH.mkName "_x")]
-              bdy = TH.NormalB (TH.VarE 'terminals `TH.AppE`
-                TH.VarE (TH.mkName "_x"))
+              pat = TH.conP (TH.mkName n) [dynP "_x"]
+              bdy = TH.normalB [| terminals $(dyn "_x") |]
 
-          RRecord sq -> [TH.Clause [pat] (TH.NormalB bdy) []]
+          RRecord sq -> [TH.clause [pat] (TH.normalB bdy) []]
             where
-              pat = TH.ConP (TH.mkName n) . fmap mkPat
+              pat = TH.conP (TH.mkName n) . fmap mkPat
                 . take (Seq.length sq) $ [0 :: Int ..]
                 where
-                  mkPat idx = TH.VarP (TH.mkName ("_x" ++ show idx))
-              bdy = foldr addField (TH.VarE 'Seq.empty)
+                  mkPat idx = dynP ("_x" ++ show idx)
+              bdy = foldr addField [| Seq.empty |]
                 . take (Seq.length sq) $ [0 :: Int ..]
                 where
-                  addField idx acc = TH.UInfixE this cons acc
+                  addField idx acc = [| $this `mappend` $acc |]
                     where
-                      this = TH.VarE 'terminals `TH.AppE` TH.VarE
-                        (TH.mkName ("_x" ++ show idx))
-                      cons = TH.VarE 'mappend
+                      this = [| terminals $(dyn ("_x" ++ show idx)) |]
 
-branchToClause :: Branch t -> TH.Clause
-branchToClause (Branch n rs) = TH.Clause [pat] bdy []
+          RUnion (r1, rs) -> mkClause r1 : fmap mkClause (toList rs)
+            where
+              mkClause (Rule inner _ _) = TH.clause [pat] bdy []
+                where
+                  pat = TH.conP (TH.mkName (unionBranchName n inner))
+                    [dynP "_x"]
+                  bdy = TH.normalB [| terminals (dyn "_x") |]
+
+
+branchToClause :: Branch t -> TH.ClauseQ
+branchToClause (Branch n rs) = TH.clause [pat] bdy []
   where
-    pat = TH.ConP (TH.mkName n) fields
+    pat = TH.conP (TH.mkName n) fields
       where
         fields = fmap mkField . take (Seq.length rs) $ [0 :: Int ..]
           where
-            mkField idx = TH.VarP (TH.mkName ("_x" ++ show idx))
-    bdy = TH.NormalB (TH.VarE 'join `TH.AppE` sq)
+            mkField idx = TH.varP (TH.mkName ("_x" ++ show idx))
+    bdy = TH.normalB [| join $sq |]
       where
-        sq = foldr addField (TH.VarE 'Seq.empty)
+        sq = foldr addField (TH.varE 'Seq.empty)
           . take (Seq.length rs) $ [0 :: Int ..]
           where
-            addField idx acc = TH.UInfixE newTerm cons acc
+            addField idx acc = [| $newTerm <| $acc |]
               where
-                newTerm = (TH.VarE 'terminals)
-                  `TH.AppE` (TH.VarE (TH.mkName ("_x" ++ show idx)))
-                cons = TH.VarE '(<|)
+                newTerm = [| terminals $(TH.varE
+                              (TH.mkName ("_x" ++ show idx))) |]
