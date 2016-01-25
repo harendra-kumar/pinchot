@@ -61,6 +61,7 @@ data Branch t = Branch String (Seq (Rule t))
 data RuleType t
   = RTerminal (Intervals t)
   | RBranch (Branch t, Seq (Branch t))
+  | RUnion (Rule t, Seq (Rule t))
   | RSeqTerm (Seq t)
   | ROptional (Rule t)
   | RList (Rule t)
@@ -135,7 +136,7 @@ instance Exception Error
 -- defined, just as you can in a set of @let@ bindings.
 
 newtype Pinchot t a
-  = Pinchot { runPinchot :: (ExceptT Error (State (Names t)) a) }
+  = Pinchot { runPinchot :: ExceptT Error (State (Names t)) a }
   deriving (Functor, Applicative, Monad, MonadFix)
 
 addRuleName
@@ -153,7 +154,7 @@ addRuleName name = Pinchot $ do
     throw = throwE $ InvalidName name
 
 addDataConName
-  :: String
+  :: AlternativeName
   -> Pinchot t ()
 addDataConName name = Pinchot $ do
   old@(Names _ dcNames _ _) <- lift get
@@ -242,12 +243,23 @@ ruleConstructorNames (Rule n _ t) = case t of
   RBranch (b1, bs) -> branchName b1 <| fmap branchName bs
     where
       branchName (Branch x _) = x
+  RUnion (b1, bs) -> branchName b1 <| fmap branchName bs
+    where
+      branchName (Rule x _ _) = unionBranchName n x
   RSeqTerm _ -> Seq.singleton n
   ROptional _ -> Seq.singleton n
   RList _ -> Seq.singleton n
   RList1 _ -> Seq.singleton n
   RWrap _ -> Seq.singleton n
   RRecord _ -> Seq.singleton n
+
+unionBranchName
+  :: RuleName
+  -- ^ Name of the parent rule
+  -> RuleName
+  -- ^ Name of the branch rule
+  -> AlternativeName
+unionBranchName p b = p ++ '\'' : b
 
 addDataConNames :: Rule t -> Pinchot t ()
 addDataConNames = mapM_ addDataConName . ruleConstructorNames
@@ -256,15 +268,17 @@ addDataConNames = mapM_ addDataConName . ruleConstructorNames
 -- each alternative produces only one rule.
 union
   :: RuleName
-  -> Seq (AlternativeName, Rule t)
+  -> Seq (Rule t)
   -> Pinchot t (Rule t)
-union name = nonTerminal name . fmap (\(n, r) -> (n, Seq.singleton r))
+union name sq = Pinchot $ case viewl sq of
+  EmptyL -> throwE $ EmptyNonTerminal name
+  x :< xs -> runPinchot $ newRule name (RUnion (x, xs))
 
 -- | Creates a new non-terminal production rule with only one
 -- alternative where each field has a record name.  The name of each
 -- record is:
 --
--- @_f\'RULE_NAME\'INDEX\'FIELD_TYPE@
+-- @_r\'RULE_NAME\'INDEX\'FIELD_TYPE@
 --
 -- where RULE_NAME is the name of this rule, INDEX is the index number
 -- for this field (starting with 0), and FIELD_TYPE is the type of the
@@ -338,6 +352,10 @@ getAncestors r@(Rule name _ ei) = do
           as1 <- branchAncestors b1
           ass <- fmap join . mapM branchAncestors $ bs
           return $ r <| as1 <> ass
+        RUnion (b1, bs) -> do
+          c1 <- getAncestors b1
+          cs <- fmap join . mapM getAncestors $ bs
+          return $ r <| c1 <> cs
         RSeqTerm _ -> return (Seq.singleton r)
         ROptional c -> do
           cs <- getAncestors c
@@ -376,6 +394,7 @@ rulesDemandedBeforeDefined = snd . foldl f (Set.empty, Set.empty)
           RBranch (b1, bs) -> foldr checkBranch (checkBranch b1 results) bs
             where
               checkBranch (Branch _ rls) rslts = foldr checkRule rslts rls
+          RUnion (b1, bs) -> foldr checkRule (checkRule b1 results) bs
           RSeqTerm _ -> results
           ROptional r -> checkRule r results
           RList r -> addHelper $ checkRule r results
@@ -395,6 +414,16 @@ thBranch (Branch nm rules) = normalC name fields
     mkField (Rule n _ _) = strictType notStrict (conT (mkName n))
     fields = toList . fmap mkField $ rules
 
+thUnionBranch
+  :: RuleName
+  -- ^ Parent rule name
+  -> Rule t
+  -- ^ Child rule
+  -> ConQ
+thUnionBranch parent (Rule child _ _) = normalC name fields
+  where
+    name = mkName (unionBranchName parent child)
+    fields = [strictType notStrict (conT (mkName child))]
 
 thRule
   :: Syntax.Lift t
@@ -431,6 +460,10 @@ makeType typeName derivesSeq nm ruleType = case ruleType of
   RBranch (b1, bs) -> dataD (cxt []) name [] cons derives
     where
       cons = thBranch b1 : toList (fmap thBranch bs)
+
+  RUnion (b1, bs) -> dataD (cxt []) name [] cons derives
+    where
+      cons = thUnionBranch nm b1 : toList (fmap (thUnionBranch nm) bs)
 
   RSeqTerm _ -> newtypeD (cxt []) name [] cons derives
     where
@@ -482,7 +515,7 @@ fieldName
   -> String
   -- ^ Inner type name
   -> String
-fieldName idx par inn = "f'" ++ par ++ "'" ++ show idx ++ "'" ++ inn
+fieldName idx par inn = "r'" ++ par ++ "'" ++ show idx ++ "'" ++ inn
 
 thAllRules
   :: Syntax.Lift t
@@ -643,7 +676,7 @@ branchesToOptics
   -> Branch t
   -> Seq (Branch t)
   -> [TH.Dec]
-branchesToOptics nm b1 bsSeq = concat $ makePrism b1 : toList (fmap makePrism bs)
+branchesToOptics nm b1 bsSeq = concat $ makePrism b1 : fmap makePrism bs
   where
     bs = toList bsSeq
     makePrism (Branch inner rulesSeq) = [ signature, binding ]
@@ -718,6 +751,36 @@ branchesToOptics nm b1 bsSeq = concat $ makePrism b1 : toList (fmap makePrism bs
                               $ TH.ConE ('Left)
                               `TH.AppE` TH.VarE (TH.mkName "_z")
 
+unionToOptics
+  :: String
+  -- ^ Rule name
+  -> Rule t
+  -- ^ First rule
+  -> Seq (Rule t)
+  -- ^ Remaining rules
+  -> TH.DecsQ
+unionToOptics parentName r1 rs
+  = fmap concat . sequence $ optics r1 : fmap optics (toList rs)
+  where
+    optics (Rule r _ _) = sequence $ sig : prism : []
+      where
+        sig = TH.sigD prismName [t| Lens.Prism' $bigType $innerType |]
+        prismName = TH.mkName $ "_" ++ parentName ++ "'" ++ r
+        bigType = TH.conT (TH.mkName parentName)
+        innerType = TH.conT (TH.mkName r)
+        prism = TH.valD (TH.varP prismName)
+          (TH.normalB [| Lens.prism $dataCtor $sToA |] ) []
+        sToA = TH.lamE [pat] expn
+          where
+            pat = TH.varP (TH.mkName "_x")
+            expn = TH.caseE (TH.varE (TH.mkName "_x"))
+              [ TH.match (TH.conP (TH.mkName r)
+                           [TH.varP (TH.mkName "_y")])
+                         (TH.normalB (TH.varE (TH.mkName "_y"))) []
+              , TH.match (TH.varP (TH.mkName "_y"))
+                         (TH.normalB (TH.varE (TH.mkName "_y"))) []
+              ]
+        dataCtor = TH.conE (TH.mkName r)
 
 recordsToOptics
   :: String
@@ -767,6 +830,7 @@ ruleToOptics
 ruleToOptics terminalName nm ty = case ty of
   RTerminal ivl -> terminalToOptics terminalName nm ivl
   RBranch (b1, bs) -> return $ branchesToOptics nm b1 bs
+  RUnion (r1, rs) -> unionToOptics nm r1 rs
   RSeqTerm sq -> seqTermToOptics terminalName nm sq
   ROptional (Rule inner _ _) -> return [optionalToOptics inner nm]
   RList (Rule inner _ _) -> return [manyToOptics inner nm]
@@ -909,6 +973,15 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
           addBranch tree branch =
             [| $tree <|> $(branchToParser prefix branch) |]
 
+  RUnion (Rule r1 _ _, rs) -> fmap (:[]) (makeRule expression)
+    where
+      expression = foldl adder start rs
+        where
+          branch r = [| $(conE (mkName (unionBranchName nm r))) <$>
+            $(varE (ruleName r)) |]
+          start = branch r1
+          adder soFar (Rule r _ _) = [| $soFar <|> $(branch r) |]
+
   RSeqTerm sq -> do
     let nestRule = bindS (varP helper) [| rule $(foldl addTerm start sq) |]
           where
@@ -987,10 +1060,10 @@ constructorName pfx nm = conE (mkName name)
       | otherwise = pfx ++ "."
 
 ruleName :: String -> Name
-ruleName suffix = mkName ("_r'" ++ suffix)
+ruleName suffix = mkName ("_rule'" ++ suffix)
 
 helperName :: String -> Name
-helperName suffix = mkName ("_h'" ++ suffix)
+helperName suffix = mkName ("_helper'" ++ suffix)
 
 branchToParser
   :: Syntax.Lift t
