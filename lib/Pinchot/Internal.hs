@@ -607,6 +607,11 @@ seqTermToOptics termName nm sq = do
               in Lens.prism fetch store
            |]
 
+-- | Creates a prism for a terminal type.  Although a newtype wraps
+-- each terminal, do not make a Wrapped or an Iso, because the
+-- relationship between the outer type and the type that it wraps
+-- typically is not isometric.  Thus, use a Prism instead, which
+-- captures this relationship properly.
 terminalToOptics
   :: Syntax.Lift t
   => Name
