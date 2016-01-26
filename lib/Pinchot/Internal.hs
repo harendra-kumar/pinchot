@@ -35,10 +35,9 @@ import qualified Language.Haskell.TH.Syntax as Syntax
 import Text.Earley (satisfy, rule, symbol)
 import qualified Text.Earley ((<?>))
 
--- | Type synonym for the name of a production rule.  
--- This will be the name of the type constructor for the corresponding
--- type in the AST, so this must be a valid Haskell type constructor
--- name.
+-- | Type synonym for the name of a production rule.  This will be the
+-- name of the type constructor for the corresponding type that will
+-- be created, so this must be a valid Haskell type constructor name.
 --
 -- If you are creating a 'terminal', 'option', 'list', 'list1', or
 -- 'wrap', the 'RuleName' will also be used for the name of the single
@@ -264,11 +263,23 @@ unionBranchName p b = p ++ '\'' : b
 addDataConNames :: Rule t -> Pinchot t ()
 addDataConNames = mapM_ addDataConName . ruleConstructorNames
 
--- | Creates a new non-terminal production rule where
--- each alternative produces only one rule.
+-- | Creates a new non-terminal production rule where each alternative
+-- produces only one rule.  The constructor name for each alternative
+-- is
+--
+-- @RULE_NAME'PRODUCTION_NAME@
+--
+-- where @RULE_NAME@ is the name of the rule itself, and
+-- @PRODUCTION_NAME@ is the rule name for what is being produced.  For
+-- an example, see 'Pinchot.Examples.PostalAstAllRules.Suffix'.
+--
+-- Currently there is no way to change the names of the constructors;
+-- however, you can use 'nonTerminal', which is more flexible.
 union
   :: RuleName
   -> Seq (Rule t)
+  -- ^ List of alternatives.  There must be at least one alternative;
+  -- otherwise a compile-time error will occur.
   -> Pinchot t (Rule t)
 union name sq = Pinchot $ case viewl sq of
   EmptyL -> throwE $ EmptyNonTerminal name
@@ -280,8 +291,8 @@ union name sq = Pinchot $ case viewl sq of
 --
 -- @_r\'RULE_NAME\'INDEX\'FIELD_TYPE@
 --
--- where RULE_NAME is the name of this rule, INDEX is the index number
--- for this field (starting with 0), and FIELD_TYPE is the type of the
+-- where @RULE_NAME@ is the name of this rule, @INDEX@ is the index number
+-- for this field (starting with 0), and @FIELD_TYPE@ is the type of the
 -- field itself.  For an example, see
 -- 'Pinchot.Examples.PostalAstAllRules.Address'.
 --
