@@ -27,9 +27,7 @@ postal = mdo
   avenue <- terminalSeq "Avenue" ['A', 'v', 'e']
   way <- terminalSeq "Way" ['W', 'a', 'y']
   boulevard <- terminalSeq "Boulevard" ['B', 'l', 'v', 'd']
-  suffix <- nonTerminal "Suffix"
-    [ ("SStreet", [street]), ("SAvenue", [avenue]), ("SWay", [way])
-    , ("SBoulevard", [boulevard])]
+  suffix <- union "Suffix" [street, avenue, way, boulevard]
   space <- terminal "Space" (solo ' ')
   comma <- terminal "Comma" (solo ',')
 

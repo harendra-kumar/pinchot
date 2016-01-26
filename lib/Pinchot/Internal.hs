@@ -777,15 +777,15 @@ unionToOptics parentName r1 rs
           (TH.normalB [| Lens.prism $dataCtor $sToA |] ) []
         sToA = TH.lamE [pat] expn
           where
-            pat = TH.varP (TH.mkName "_x")
-            expn = TH.caseE (TH.varE (TH.mkName "_x"))
-              [ TH.match (TH.conP (TH.mkName r)
-                           [TH.varP (TH.mkName "_y")])
-                         (TH.normalB (TH.varE (TH.mkName "_y"))) []
-              , TH.match (TH.varP (TH.mkName "_y"))
-                         (TH.normalB (TH.varE (TH.mkName "_y"))) []
+            pat = dynP "_x"
+            expn = TH.caseE (dyn "_x")
+              [ TH.match (TH.conP (TH.mkName (unionBranchName parentName r))
+                           [TH.varP (TH.mkName "_a")])
+                         (TH.normalB [| Right $(dyn "_a") |]) []
+              , TH.match (dynP "_b")
+                         (TH.normalB [| Left $(dyn "_b") |]) []
               ]
-        dataCtor = TH.conE (TH.mkName r)
+        dataCtor = TH.conE (TH.mkName (unionBranchName parentName r))
 
 recordsToOptics
   :: String
@@ -953,7 +953,13 @@ ruleTreeToTypes doOptics typeName derives pinchot = case ei of
     (ei, _) = runState (runExceptT (runPinchot pinchot))
       (Names Set.empty Set.empty 0 M.empty)
 
-
+addPrefix
+  :: String
+  -> String
+  -> String
+addPrefix pfx suf
+  | null pfx = suf
+  | otherwise = pfx ++ '.':suf
 
 ruleToParser
   :: Syntax.Lift t
@@ -982,7 +988,8 @@ ruleToParser prefix (Rule nm mayDescription rt) = case rt of
     where
       expression = foldl adder start rs
         where
-          branch r = [| $(conE (mkName (unionBranchName nm r))) <$>
+          branch r = [| $(conE (mkName
+            (addPrefix prefix . unionBranchName nm $ r))) <$>
             $(varE (ruleName r)) |]
           start = branch r1
           adder soFar (Rule r _ _) = [| $soFar <|> $(branch r) |]
@@ -1199,8 +1206,8 @@ productionInstance term n t = TH.instanceD (return []) ty ds
             where
               justClause
                 = TH.clause [TH.conP (TH.mkName n)
-                    [TH.conP 'Just [TH.varP (TH.mkName "_x")]]]
-                    (TH.normalB [| terminals $(TH.varE (TH.mkName "_x")) |])
+                    [TH.conP 'Just [TH.varP (TH.mkName "_b")]]]
+                    (TH.normalB [| terminals $(TH.varE (TH.mkName "_b")) |])
                     []
               nothingClause
                 = TH.clause [TH.conP (TH.mkName n)
@@ -1209,9 +1216,9 @@ productionInstance term n t = TH.instanceD (return []) ty ds
 
           RList _ -> [TH.clause [pat] bdy []]
             where
-              pat = TH.conP (TH.mkName n) [TH.varP (TH.mkName "_x")] 
+              pat = TH.conP (TH.mkName n) [TH.varP (TH.mkName "_a")] 
               bdy = TH.normalB [| join
-                $ fmap terminals $(TH.varE (TH.mkName "_x")) |]
+                $ fmap terminals $(TH.varE (TH.mkName "_a")) |]
 
           RList1 _ -> [TH.clause [pat] bdy []]
             where
@@ -1247,7 +1254,7 @@ productionInstance term n t = TH.instanceD (return []) ty ds
                 where
                   pat = TH.conP (TH.mkName (unionBranchName n inner))
                     [dynP "_x"]
-                  bdy = TH.normalB [| terminals (dyn "_x") |]
+                  bdy = TH.normalB [| terminals $(dyn "_x") |]
 
 
 branchToClause :: Branch t -> TH.ClauseQ
