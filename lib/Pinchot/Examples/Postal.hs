@@ -20,9 +20,7 @@ postal = mdo
   south <- terminal "South" (solo 'S')
   east <- terminal "East" (solo 'E')
   west <- terminal "West" (solo 'W')
-  direction <- nonTerminal "Direction"
-    [ ("DNorth", [north]), ("DSouth", [south]), ("DEast", [east])
-    , ("DWest", [west])]
+  direction <- union "Direction" [north, south, east, west]
   street <- terminalSeq "Street" ['S', 't']
   avenue <- terminalSeq "Avenue" ['A', 'v', 'e']
   way <- terminalSeq "Way" ['W', 'a', 'y']
@@ -40,21 +38,17 @@ postal = mdo
 
   -- Named "PostalWord" to avoid clash with Prelude.Word
   word <- record "PostalWord" [letter, letters]
-  preSpacedWord <- nonTerminal "PreSpacedWord"
-    [("PreSpacedWord", [space, word])]
+  preSpacedWord <- record "PreSpacedWord" [space, word]
   preSpacedWords <- list "PreSpacedWords" preSpacedWord
-  words <- nonTerminal "Words"
-    [("Words", [word, preSpacedWords])]
+  words <- record "Words" [word, preSpacedWords]
 
   number <- wrap "Number" digits
   streetName <- wrap "StreetName" words
   city <- wrap "City" words
   state <- wrap "State" word
   zipCode <- wrap "ZipCode" digits
-  directionSpace <- nonTerminal "DirectionSpace"
-    [("DirectionSpace", [direction, space])]
-  spaceSuffix <- nonTerminal "SpaceSuffix"
-    [("SpaceSuffix", [space, suffix])]
+  directionSpace <- record "DirectionSpace" [direction, space]
+  spaceSuffix <- record "SpaceSuffix" [space, suffix]
   optDirection <- option "MaybeDirection" directionSpace
   optSuffix <- option "MaybeSuffix" spaceSuffix
   address <- record "Address"
