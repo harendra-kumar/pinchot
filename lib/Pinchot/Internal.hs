@@ -309,34 +309,41 @@ record name sq = newRule name (RRecord sq)
 
 
 -- | Creates a rule for the production of a sequence of other rules.
+-- The name for the created 'Rule' is the name of the 'Rule' to which
+-- this function is applied, with @'Seq@ appended.
 list
-  :: RuleName
-
-  -> Rule t
+  :: Rule t
   -- ^ The resulting 'Rule' is a sequence of productions of this
   -- 'Rule'; that is, this 'Rule' may appear zero or more times.
 
   -> Pinchot t (Rule t)
-list name r = newRule name (RList r)
+list r@(Rule inner _ _) = newRule name (RList r)
+  where
+    name = inner ++ "'Seq"
 
--- | Creates a rule for a production that appears at least once.
+-- | Creates a rule for a production that appears at least once.  The
+-- name for the created 'Rule' is the name of the 'Rule' to which this
+-- function is applied, with @'Seq1@ appended.
 list1
-  :: RuleName
-  -> Rule t
+  :: Rule t
   -- ^ The resulting 'Rule' produces this 'Rule' at least once.
   -> Pinchot t (Rule t)
-list1 name r = newRule name (RList1 r)
+list1 r@(Rule inner _ _) = newRule name (RList1 r)
+  where
+    name = inner ++ "'Seq1"
 
 -- | Creates a rule for a production that optionally produces another
--- rule.
+-- rule.  The name for the created 'Rule' is the name of the 'Rule' to
+-- which this function is applied, with @'Maybe@ appended to the end.
 option
-  :: RuleName
-  -> Rule t
+  :: Rule t
   -- ^ The resulting 'Rule' optionally produces this 'Rule'; that is,
   -- this 'Rule' may appear once or not at all.
 
   -> Pinchot t (Rule t)
-option name r = newRule name (ROptional r)
+option r@(Rule inner _ _) = newRule name (ROptional r)
+  where
+    name = inner ++ "'Maybe"
 
 -- | Creates a newtype wrapper.
 

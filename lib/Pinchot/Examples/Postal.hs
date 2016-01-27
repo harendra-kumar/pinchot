@@ -13,7 +13,7 @@ import Data.Monoid ((<>))
 postal :: Pinchot Char (Rule Char)
 postal = mdo
   digit <- terminal "Digit" (include '0' '9') <?> "digit from 0 to 9"
-  digits <- list1 "Digits" digit
+  digits <- list1 digit
   letter <- terminal "Letter" (include 'a' 'z' <> include 'A' 'Z')
     <?> "letter from A to Z"
   north <- terminal "North" (solo 'N')
@@ -39,7 +39,7 @@ postal = mdo
   -- Named "PostalWord" to avoid clash with Prelude.Word
   word <- record "PostalWord" [letter, letters]
   preSpacedWord <- record "PreSpacedWord" [space, word]
-  preSpacedWords <- list "PreSpacedWords" preSpacedWord
+  preSpacedWords <- list preSpacedWord
   words <- record "Words" [word, preSpacedWords]
 
   number <- wrap "Number" digits
@@ -49,8 +49,8 @@ postal = mdo
   zipCode <- wrap "ZipCode" digits
   directionSpace <- record "DirectionSpace" [direction, space]
   spaceSuffix <- record "SpaceSuffix" [space, suffix]
-  optDirection <- option "MaybeDirection" directionSpace
-  optSuffix <- option "MaybeSuffix" spaceSuffix
+  optDirection <- option directionSpace
+  optSuffix <- option spaceSuffix
   address <- record "Address"
     [ number, space, optDirection, streetName, optSuffix,
       comma, space, city, comma, space, state, space, zipCode
